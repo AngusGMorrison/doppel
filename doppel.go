@@ -16,7 +16,7 @@ import (
 // InitCache starts the template cache and sets the requestStream by
 // which requests are sent to the cache. Must be called before
 // attempting to call Get.
-func InitCache(done <-chan struct{}, templateDir string) {
+func InitGlobalCache(done <-chan struct{}, templateDir string) {
 	requestStream = cacheTemplates(done, templateDir)
 }
 
@@ -193,4 +193,45 @@ func Get(name string) (*template.Template, error) {
 		return nil, res.err // TODO: wrap error at package boundary
 	}
 	return res.tmpl, nil
+}
+
+type Doppel struct {
+	done          chan<- struct{}
+	requestStream chan<- *request
+	// Heartbeat <-chan struct{}
+	// pulseInterval time.Duration
+}
+
+type Option func(*Doppel) *Doppel
+
+//
+func New(templateDir string, opts []Option) (*Doppel, error) {
+	// TODO: Cache should error ASAP if templateDir is inaccessible.
+
+	// TODO: Functional options for heartbeat, pulse rate, timeout...
+	// d := &Doppel{done: make(chan struct{})}
+	// for _, opt := range opts {
+	// 	d = opt(d)
+	// }
+
+	done := make(chan struct{})
+	requestStream, err := cacheTemplates(done, templateDir)
+	if err != nil {
+		// TODO: Wrap error at package boundary.
+		return nil, err
+	}
+
+	d := &Doppel{done, requestStream}
+	return d, nil
+}
+
+// Close waits for the current Get request to complete before closing
+// the Doppel's done channel. Subsequent requests to the Doppel will
+// return ErrDoppelClosed.
+func (d *Doppel) Close() {
+	close(d.done)
+}
+
+func (d *Doppel) Get(name string) (*template.Template, error) {
+
 }
