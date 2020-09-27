@@ -51,8 +51,8 @@ func (cs CacheSchematic) clone() CacheSchematic {
 // baseTmplName may be an empty string, indicating a template without
 // a base.
 type TemplateSchematic struct {
-	baseTmplName string
-	filepaths    []string
+	BaseTmplName string
+	Filepaths    []string
 }
 
 func (ts *TemplateSchematic) clone() *TemplateSchematic {
