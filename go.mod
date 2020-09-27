@@ -1,4 +1,4 @@
-module angusgmorrison/doppel
+module github.com/angusgmorrison/doppel
 
 go 1.15
 
