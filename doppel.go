@@ -1,28 +1,86 @@
-// Package templates handles template parsing and access for FB05
-// via a concurrent, non-blocking cache.
-package templates
+// Package doppel provides configurable, concurrent, non-blocking
+// caching of composable templates.
+package doppel
 
 import (
-	"angusgmorrison/fb05/pkg/env"
+	"context"
 	"fmt"
 	"html/template"
-	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
-	"golang.org/x/net/context"
 )
 
-// InitCache starts the template cache and sets the requestStream by
-// which requests are sent to the cache. Must be called before
-// attempting to call Get.
-func InitGlobalCache(done <-chan struct{}, templateDir string) {
-	requestStream = cacheTemplates(done, templateDir)
+// A Doppel provides a mechanism to configure, send requests to and
+// close a concurrent, non-blocking template cache.
+//
+// A template is parsed when it is first requested, recursively
+// parsing any templates on which it depends if they are not present
+// in the cache. Parsed templates are stored in memory until the
+// program ends, a timeout expires, or a memory threshold has been
+// reached, per user configuration via functional options.
+type Doppel struct {
+	done                  chan struct{}
+	requestStream         chan *request
+	requestTimeoutSeconds time.Duration // TODO: Implement timeout functional option
+	schematic             CacheSchematic
+	err                   error
+	// Heartbeat <-chan struct{}
+	// pulseInterval time.Duration
 }
 
-type templateSchematic struct {
-	baseTemplate string
-	files        []string
+// A CacheSchematic is a collection of named TemplateSchematics,
+// allowing TemplateSchematics to reference their base templates by
+// name.
+//
+// TODO: Is this the best representation? Would something more
+// explicitly graph-like be an improvement?
+type CacheSchematic map[string]*TemplateSchematic
+
+func (cs CacheSchematic) clone() CacheSchematic {
+	dest := make(CacheSchematic, len(cs))
+	for k, v := range cs {
+		dest[k] = v.clone()
+	}
+	return dest
+}
+
+// TemplateSchematic describes how to parse a template from a named
+// base template in the cache and zero or more template files.
+//
+// baseTmplName may be an empty string, indicating a template without
+// a base.
+type TemplateSchematic struct {
+	baseTmplName string
+	filepaths    []string
+}
+
+func (ts *TemplateSchematic) clone() *TemplateSchematic {
+	dest := &TemplateSchematic{
+		baseTmplName: ts.baseTmplName,
+		filepaths:    make([]string, len(ts.filepaths)),
+	}
+	copy(dest.filepaths, ts.filepaths)
+	return dest
+}
+
+// New configures a new *Doppel and returns it to the caller.
+func New(schematic CacheSchematic, opts ...Option) *Doppel {
+	d := &Doppel{
+		schematic: schematic.clone(), // prevent race conditions as a result of external access
+	}
+	// TODO: Functional options for heartbeat, pulse rate, timeout...
+	for _, opt := range opts {
+		d = opt(d)
+	}
+
+	done := make(chan struct{})
+	if d.done == nil {
+		d.done = done
+	}
+
+	go d.startCache()
+	return d
 }
 
 type request struct {
@@ -36,10 +94,6 @@ type result struct {
 	err  error
 }
 
-// requestStream is the channel by which the cache receives requests
-// for templates.
-var requestStream chan<- *request
-
 // cacheTemplates is a concurrent, non-blocking cache or templates and
 // sub-templates that runs until cancelled.
 //
@@ -50,144 +104,67 @@ var requestStream chan<- *request
 //
 // TODO: Implement interval heartbeat.
 // TODO: Implement template expiry.
-func cacheTemplates(done <-chan struct{}, templateDir string) chan<- *request {
-	var (
-		sharedDir = filepath.Join(templateDir, "shared")
-		publicDir = filepath.Join(templateDir, "public")
-	)
-
-	schematics := map[string]*templateSchematic{
-		"root": {
-			"",
-			[]string{filepath.Join(sharedDir, "application.gohtml"),
-				filepath.Join(sharedDir, "banner_nav.gohtml")},
-		},
-		"primary_sidebar_base": {"root", []string{filepath.Join(sharedDir, "sidebar_nav.gohtml")}},
-		"homepage":             {"primary_sidebar_base", []string{filepath.Join(publicDir, "homepage.gohtml")}},
-		"login":                {"primary_sidebar_base", []string{filepath.Join(publicDir, "login.gohtml")}},
-	}
-
+func (d *Doppel) startCache() {
 	templates := make(map[string]*cacheEntry)
-	requestStream := make(chan *request)
-	go func() {
-		defer func() {
-			close(requestStream)
-			requestStream = nil // used by Get to signal an uninitialized cache
-		}()
-
-		for {
-			select {
-			case <-done:
-				return
-			case req := <-requestStream:
-				select {
-				case <-req.ctx.Done():
-					req.resultStream <- &result{err: req.ctx.Err()}
-					continue
-				default:
-				}
-
-				entry := templates[req.name]
-				if entry == nil {
-					schematic := schematics[req.name]
-					if schematic == nil {
-						req.resultStream <- &result{
-							err: errors.New(
-								fmt.Sprintf("requested schematic %q not found", req.name)),
-						}
-						continue
-					}
-
-					entry = &cacheEntry{ready: make(chan struct{})}
-					templates[req.name] = entry
-					go entry.parse(req, schematic)
-				} else if entry.err != nil {
-					req.resultStream <- &result{err: entry.err}
-					continue
-				}
-				go entry.deliver(req)
-			}
-		}
+	d.requestStream = make(chan *request)
+	defer func() {
+		close(d.requestStream)
 	}()
 
-	return requestStream
-}
-
-type cacheEntry struct {
-	ready chan struct{}
-	tmpl  *template.Template
-	err   error
-}
-
-func (ce *cacheEntry) parse(req *request, s *templateSchematic) {
-	defer close(ce.ready)
-
-	var err error
-	select {
-	case <-req.ctx.Done():
-		ce.deliverErr(req.ctx.Err(), req)
-	default:
-	}
-
-	var tmpl *template.Template
-	if s.baseTemplate == "" {
-		tmpl, err = template.ParseFiles(s.files...)
-	} else {
-		base, err := Get(s.baseTemplate)
-		if err != nil {
-			ce.err = err
+	for {
+		select {
+		case <-d.done:
 			return
+		case req := <-d.requestStream:
+			select {
+			case <-req.ctx.Done():
+				req.resultStream <- &result{err: req.ctx.Err()}
+				continue
+			default:
+			}
+
+			entry := templates[req.name]
+			if entry == nil {
+				tmplSchematic := d.schematic[req.name]
+				if tmplSchematic == nil {
+					req.resultStream <- &result{
+						// TODO: Improve error wrapping
+						err: errors.New(
+							fmt.Sprintf("requested schematic %q not found", req.name)),
+					}
+					continue
+				}
+
+				entry = &cacheEntry{ready: make(chan struct{})}
+				templates[req.name] = entry
+				go entry.parse(req, tmplSchematic)
+			} else if entry.err != nil {
+				req.resultStream <- &result{err: entry.err}
+				continue
+			}
+			go entry.deliver(req)
 		}
-		tmpl, err = base.ParseFiles(s.files...)
 	}
-	if err != nil {
-		ce.err = err
-		return
-	}
-
-	ce.tmpl = tmpl
-	return
-}
-
-func (ce *cacheEntry) deliver(req *request) {
-	select {
-	case <-req.ctx.Done():
-		ce.deliverErr(req.ctx.Err(), req)
-	case <-ce.ready:
-	}
-
-	if ce.err != nil {
-		req.resultStream <- &result{err: ce.err}
-		return
-	}
-
-	clone, err := ce.tmpl.Clone()
-	if err != nil {
-		req.resultStream <- &result{err: ce.err}
-		return
-	}
-	req.resultStream <- &result{tmpl: clone}
-	return
-}
-
-func (ce *cacheEntry) deliverErr(err error, req *request) {
-	ce.err = err
-	req.resultStream <- &result{err: err}
 }
 
 // Get returns a named template from the cache. Thread-safe.
-func Get(name string) (*template.Template, error) {
-	if requestStream == nil {
-		return nil, errors.New("template cache has not been initialized") // TODO: wrap error at package boundary
+func (d *Doppel) Get(name string) (*template.Template, error) {
+	select {
+	case <-d.done:
+		return nil, errors.New("cache has been closed") // TODO: wrap error at package boundary
+	default:
 	}
 
-	timeout := env.GetDuration("TEMPLATE_TIMEOUT") * time.Second // TODO: check presence of env var before using
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	var ctx context.Context
+	if d.requestTimeoutSeconds != 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), d.requestTimeoutSeconds)
+		defer cancel()
+	}
 
 	resultStream := make(chan *result)
 	req := &request{ctx, name, resultStream}
-	requestStream <- req
+	d.requestStream <- req
 	res := <-resultStream
 	if res.err != nil {
 		return nil, res.err // TODO: wrap error at package boundary
@@ -195,43 +172,11 @@ func Get(name string) (*template.Template, error) {
 	return res.tmpl, nil
 }
 
-type Doppel struct {
-	done          chan<- struct{}
-	requestStream chan<- *request
-	// Heartbeat <-chan struct{}
-	// pulseInterval time.Duration
-}
-
-type Option func(*Doppel) *Doppel
-
-//
-func New(templateDir string, opts []Option) (*Doppel, error) {
-	// TODO: Cache should error ASAP if templateDir is inaccessible.
-
-	// TODO: Functional options for heartbeat, pulse rate, timeout...
-	// d := &Doppel{done: make(chan struct{})}
-	// for _, opt := range opts {
-	// 	d = opt(d)
-	// }
-
-	done := make(chan struct{})
-	requestStream, err := cacheTemplates(done, templateDir)
-	if err != nil {
-		// TODO: Wrap error at package boundary.
-		return nil, err
-	}
-
-	d := &Doppel{done, requestStream}
-	return d, nil
-}
-
 // Close waits for the current Get request to complete before closing
 // the Doppel's done channel. Subsequent requests to the Doppel will
 // return ErrDoppelClosed.
+//
+// TODO: Implement ErrDoppelClosed.
 func (d *Doppel) Close() {
 	close(d.done)
-}
-
-func (d *Doppel) Get(name string) (*template.Template, error) {
-
 }
