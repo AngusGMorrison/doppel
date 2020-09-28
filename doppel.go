@@ -116,11 +116,13 @@ func (d *Doppel) startCache() {
 		case <-d.done:
 			return
 		case req := <-d.requestStream:
-			select {
-			case <-req.ctx.Done():
-				req.resultStream <- &result{err: req.ctx.Err()}
-				continue
-			default:
+			if reqDone := req.ctx.Done(); reqDone != nil {
+				select {
+				case <-req.ctx.Done():
+					req.resultStream <- &result{err: req.ctx.Err()}
+					continue
+				default:
+				}
 			}
 
 			entry := templates[req.name]
@@ -156,7 +158,9 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	}
 
 	var ctx context.Context
-	if d.requestTimeoutSeconds != 0 {
+	if d.requestTimeoutSeconds == 0 {
+		ctx = context.Background()
+	} else {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), d.requestTimeoutSeconds)
 		defer cancel()
