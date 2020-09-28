@@ -19,15 +19,15 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
 	}
 
 	var tmpl *template.Template
-	if s.baseTmplName == "" {
-		tmpl, err = template.ParseFiles(s.filepaths...)
+	if s.BaseTmplName == "" {
+		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
-		base, err := Get(s.baseTmplName)
+		base, err := Get(s.BaseTmplName)
 		if err != nil {
 			ce.err = err
 			return
 		}
-		tmpl, err = base.ParseFiles(s.filepaths...)
+		tmpl, err = base.ParseFiles(s.Filepaths...)
 	}
 	if err != nil {
 		ce.err = err
