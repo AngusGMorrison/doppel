@@ -48,7 +48,7 @@ func (cs CacheSchematic) clone() CacheSchematic {
 // TemplateSchematic describes how to parse a template from a named
 // base template in the cache and zero or more template files.
 //
-// baseTmplName may be an empty string, indicating a template without
+// BaseTmplName may be an empty string, indicating a template without
 // a base.
 type TemplateSchematic struct {
 	BaseTmplName string
@@ -57,10 +57,10 @@ type TemplateSchematic struct {
 
 func (ts *TemplateSchematic) clone() *TemplateSchematic {
 	dest := &TemplateSchematic{
-		baseTmplName: ts.baseTmplName,
-		filepaths:    make([]string, len(ts.filepaths)),
+		BaseTmplName: ts.BaseTmplName,
+		Filepaths:    make([]string, len(ts.Filepaths)),
 	}
-	copy(dest.filepaths, ts.filepaths)
+	copy(dest.Filepaths, ts.Filepaths)
 	return dest
 }
 
