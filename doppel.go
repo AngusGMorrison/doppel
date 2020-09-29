@@ -66,6 +66,7 @@ func (ts *TemplateSchematic) clone() *TemplateSchematic {
 
 // New configures a new *Doppel and returns it to the caller.
 func New(schematic CacheSchematic, opts ...Option) *Doppel {
+	// TODO: Ensure schematic is acylcic.
 	d := &Doppel{
 		schematic: schematic.clone(), // prevent race conditions as a result of external access
 	}
@@ -79,7 +80,7 @@ func New(schematic CacheSchematic, opts ...Option) *Doppel {
 		d.done = done
 	}
 
-	go d.startCache()
+	go d.startCache() // TODO: Fix race condition - stream may not be ready to receive requests
 	return d
 }
 
@@ -116,6 +117,10 @@ func (d *Doppel) startCache() {
 		case <-d.done:
 			return
 		case req := <-d.requestStream:
+			// TODO: Delete
+			fmt.Printf("%+v", req)
+			fmt.Printf("%+v", req.ctx)
+			fmt.Printf("%+v", req.ctx.Done())
 			if reqDone := req.ctx.Done(); reqDone != nil {
 				select {
 				case <-req.ctx.Done():
@@ -168,6 +173,7 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 
 	resultStream := make(chan *result)
 	req := &request{ctx, name, resultStream}
+	// TODO: Select with timeout
 	d.requestStream <- req
 	res := <-resultStream
 	if res.err != nil {
