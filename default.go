@@ -23,8 +23,7 @@ func Initialize(done chan struct{}, schematic CacheSchematic, opts ...Option) {
 		return d
 	}
 
-	d := New(schematic, append(opts, cancelOpt)...)
-	defaultCache = d
+	defaultCache = New(schematic, append(opts, cancelOpt)...)
 }
 
 // Get returns a copy of the name template if it exists in the cache,

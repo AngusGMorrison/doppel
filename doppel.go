@@ -25,8 +25,8 @@ type Doppel struct {
 	requestTimeoutSeconds time.Duration // TODO: Implement timeout functional option
 	schematic             CacheSchematic
 	err                   error
-	// Heartbeat <-chan struct{}
-	// pulseInterval time.Duration
+	heartbeat             chan struct{}
+	pulseInterval         time.Duration
 }
 
 // A CacheSchematic is a collection of named TemplateSchematics,
@@ -70,7 +70,7 @@ func New(schematic CacheSchematic, opts ...Option) *Doppel {
 	d := &Doppel{
 		schematic: schematic.clone(), // prevent race conditions as a result of external access
 	}
-	// TODO: Functional options for heartbeat, pulse rate, timeout...
+	// TODO: Functional options for pulse rate, timeout...
 	for _, opt := range opts {
 		d = opt(d)
 	}
@@ -80,7 +80,7 @@ func New(schematic CacheSchematic, opts ...Option) *Doppel {
 		d.done = done
 	}
 
-	go d.startCache() // TODO: Fix race condition - stream may not be ready to receive requests
+	d.startCache()
 	return d
 }
 
@@ -106,46 +106,57 @@ type result struct {
 // TODO: Implement interval heartbeat.
 // TODO: Implement template expiry.
 func (d *Doppel) startCache() {
-	templates := make(map[string]*cacheEntry)
+	// Create heartbeat and request stream synchronously to ensure
+	// a caller can never receive nil channels.
+	d.heartbeat = make(chan struct{}, 1)
 	d.requestStream = make(chan *request)
-	defer func() {
-		close(d.requestStream)
-	}()
 
-	for {
-		select {
-		case <-d.done:
-			return
-		case req := <-d.requestStream:
+	go func() {
+		defer close(d.heartbeat)
+		defer close(d.requestStream)
+
+		templates := make(map[string]*cacheEntry)
+		for {
 			select {
-			case <-req.ctx.Done():
-				req.resultStream <- &result{err: req.ctx.Err()}
-				continue
+			case d.heartbeat <- struct{}{}:
+				// Signals that cache is ready to receive work.
 			default:
 			}
 
-			entry := templates[req.name]
-			if entry == nil {
-				tmplSchematic := d.schematic[req.name]
-				if tmplSchematic == nil {
-					req.resultStream <- &result{
-						// TODO: Improve error wrapping
-						err: errors.New(
-							fmt.Sprintf("requested schematic %q not found", req.name)),
-					}
+			select {
+			case <-d.done:
+				return
+			case req := <-d.requestStream:
+				select {
+				case <-req.ctx.Done():
+					req.resultStream <- &result{err: req.ctx.Err()}
 					continue
+				default:
 				}
 
-				entry = &cacheEntry{ready: make(chan struct{})}
-				templates[req.name] = entry
-				go entry.parse(req, tmplSchematic)
-			} else if entry.err != nil {
-				req.resultStream <- &result{err: entry.err}
-				continue
+				entry := templates[req.name]
+				if entry == nil {
+					tmplSchematic := d.schematic[req.name]
+					if tmplSchematic == nil {
+						req.resultStream <- &result{
+							// TODO: Improve error wrapping
+							err: errors.New(
+								fmt.Sprintf("requested schematic %q not found", req.name)),
+						}
+						continue
+					}
+
+					entry = &cacheEntry{ready: make(chan struct{})}
+					templates[req.name] = entry
+					go entry.parse(req, tmplSchematic)
+				} else if entry.err != nil {
+					req.resultStream <- &result{err: entry.err}
+					continue
+				}
+				go entry.deliver(req)
 			}
-			go entry.deliver(req)
 		}
-	}
+	}()
 }
 
 // Get returns a named template from the cache. Thread-safe.
@@ -164,8 +175,6 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	} else {
 		ctx = context.Background()
 	}
-
-	fmt.Printf("%+v/n", ctx.Done())
 
 	// Buffer resultStream to ensure timeout-related errors can
 	// be sent by the cache even after Get returns.
@@ -187,6 +196,12 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 		}
 		return res.tmpl, nil
 	}
+}
+
+// Heartbeat returns the Doppel's heartbeat channel, which is never
+// nil.
+func (d *Doppel) Heartbeat() <-chan struct{} {
+	return d.heartbeat
 }
 
 // Close waits for the current Get request to complete before closing
