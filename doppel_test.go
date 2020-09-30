@@ -27,7 +27,29 @@ var schematic = CacheSchematic{
 
 func TestHeartbeat(t *testing.T) {
 	t.Run("returns a channel that receives a signal on each new request cycle", func(t *testing.T) {
-		// d := New
+		wantHeartbeats := 4
+		d := New(schematic)
+		d.heartbeat = make(chan struct{}, wantHeartbeats)
+
+		for i := 0; i < wantHeartbeats-1; i++ {
+			d.Get("base")
+		}
+
+		hb := d.Heartbeat()
+		var gotHeartbeats int
+	loop:
+		for {
+			select {
+			case <-hb:
+				gotHeartbeats++
+			default:
+				break loop
+			}
+		}
+
+		if gotHeartbeats != wantHeartbeats {
+			t.Errorf("got %d cycles, want %d\n", gotHeartbeats, wantHeartbeats)
+		}
 	})
 }
 
