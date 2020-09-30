@@ -117,17 +117,11 @@ func (d *Doppel) startCache() {
 		case <-d.done:
 			return
 		case req := <-d.requestStream:
-			// TODO: Delete
-			fmt.Printf("%+v", req)
-			fmt.Printf("%+v", req.ctx)
-			fmt.Printf("%+v", req.ctx.Done())
-			if reqDone := req.ctx.Done(); reqDone != nil {
-				select {
-				case <-req.ctx.Done():
-					req.resultStream <- &result{err: req.ctx.Err()}
-					continue
-				default:
-				}
+			select {
+			case <-req.ctx.Done():
+				req.resultStream <- &result{err: req.ctx.Err()}
+				continue
+			default:
 			}
 
 			entry := templates[req.name]
@@ -163,23 +157,36 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	}
 
 	var ctx context.Context
-	if d.requestTimeoutSeconds == 0 {
-		ctx = context.Background()
-	} else {
+	if d.requestTimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), d.requestTimeoutSeconds)
 		defer cancel()
+	} else {
+		ctx = context.Background()
 	}
 
-	resultStream := make(chan *result)
+	fmt.Printf("%+v/n", ctx.Done())
+
+	// Buffer resultStream to ensure timeout-related errors can
+	// be sent by the cache even after Get returns.
+	resultStream := make(chan *result, 1)
 	req := &request{ctx, name, resultStream}
-	// TODO: Select with timeout
-	d.requestStream <- req
-	res := <-resultStream
-	if res.err != nil {
-		return nil, res.err // TODO: wrap error at package boundary
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err() // TODO: Wrap
+	case d.requestStream <- req:
 	}
-	return res.tmpl, nil
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err() // TODO: Wrap
+	case res := <-resultStream:
+		if res.err != nil {
+			return nil, res.err // TODO: wrap error at package boundary
+		}
+		return res.tmpl, nil
+	}
 }
 
 // Close waits for the current Get request to complete before closing
