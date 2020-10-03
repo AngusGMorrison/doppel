@@ -29,11 +29,30 @@ var schematic = CacheSchematic{
 func TestNew(t *testing.T) {
 	t.Run("CacheSchematic operations", func(t *testing.T) {
 		t.Run("returns an error if schematic is cyclic", func(t *testing.T) {
-
+			cyclicSchematic := schematic.Clone()
+			cyclicSchematic["commonNav"].BaseTmplName = "withBody1"
+			d, err := New(cyclicSchematic)
+			if err == nil {
+				t.Errorf("failed to report cycle in schematic")
+			}
+			if d != nil {
+				t.Errorf("got *Doppel %+v, want nil", d)
+				d.Close()
+			}
 		})
 
 		t.Run("clones provided schematic before use", func(t *testing.T) {
+			testSchematic := schematic.Clone()
+			d, err := New(testSchematic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Close() // ensures a schematic data race is impossible
 
+			d.schematic["base"] = nil
+			if testSchematic["base"] == nil {
+				t.Error("schematic was not cloned")
+			}
 		})
 	})
 
@@ -50,7 +69,10 @@ func TestNew(t *testing.T) {
 				optArgs[i] = opt
 			}
 
-			d := New(schematic, optArgs...)
+			d, err := New(schematic, optArgs...)
+			if err != nil {
+				t.Fatal(err)
+			}
 			defer d.Close()
 
 			if optsCalled != optCount {
@@ -75,7 +97,10 @@ func TestHeartbeat(t *testing.T) {
 		const timeout = 1
 		const wantHeartbeats = 4
 		var gotHeartbeats int
-		d := New(schematic)
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
 		defer d.Close()
 		hb := d.Heartbeat()
 
@@ -110,7 +135,10 @@ func TestGet(t *testing.T) {
 		t.Run(fmt.Sprintf("composes and returns %s", tc.schematicName), func(t *testing.T) {
 			done := make(chan struct{})
 			defer close(done)
-			Initialize(done, schematic)
+			err := Initialize(done, schematic)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			tmpl, err := Get(tc.schematicName)
 			if err != nil {
@@ -144,7 +172,7 @@ func TestGet(t *testing.T) {
 
 func TestIsCyclic(t *testing.T) {
 	testCycle := func(start, end string, t *testing.T) {
-		cyclicSchematic := schematic.clone()
+		cyclicSchematic := schematic.Clone()
 		cyclicSchematic[end].BaseTmplName = start
 
 		cycle, err := IsCyclic(cyclicSchematic)

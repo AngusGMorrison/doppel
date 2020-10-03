@@ -32,10 +32,11 @@ type Doppel struct {
 // which reference their base templates by name.
 type CacheSchematic map[string]*TemplateSchematic
 
-func (cs CacheSchematic) clone() CacheSchematic {
+// Clone returns a deep copy of the CacheSchematic.
+func (cs CacheSchematic) Clone() CacheSchematic {
 	dest := make(CacheSchematic, len(cs))
 	for k, v := range cs {
-		dest[k] = v.clone()
+		dest[k] = v.Clone()
 	}
 	return dest
 }
@@ -50,7 +51,9 @@ type TemplateSchematic struct {
 	Filepaths    []string
 }
 
-func (ts *TemplateSchematic) clone() *TemplateSchematic {
+// Clone returns a pointer to deep copy of the underlying
+// TemplateSchematic.
+func (ts *TemplateSchematic) Clone() *TemplateSchematic {
 	dest := &TemplateSchematic{
 		BaseTmplName: ts.BaseTmplName,
 		Filepaths:    make([]string, len(ts.Filepaths)),
@@ -68,8 +71,9 @@ func New(schematic CacheSchematic, opts ...Option) (*Doppel, error) {
 	}
 
 	d := &Doppel{
-		schematic: schematic.clone(), // prevent race conditions as a result of external access
+		schematic: schematic.Clone(), // prevent race conditions as a result of external access
 	}
+
 	// TODO: Functional options for pulse rate, timeout...
 	for _, opt := range opts {
 		opt(d)
