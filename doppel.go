@@ -59,15 +59,20 @@ func (ts *TemplateSchematic) clone() *TemplateSchematic {
 	return dest
 }
 
-// New configures a new *Doppel and returns it to the caller.
-func New(schematic CacheSchematic, opts ...Option) *Doppel {
-	// TODO: Ensure schematic is acylcic.
+// New configures a new *Doppel and returns it to the caller. It
+// should not be used concurrently with operations on the provided
+// schematic.
+func New(schematic CacheSchematic, opts ...Option) (*Doppel, error) {
+	if cyclic, err := IsCyclic(schematic); cyclic {
+		return nil, err // TODO: Wrap
+	}
+
 	d := &Doppel{
 		schematic: schematic.clone(), // prevent race conditions as a result of external access
 	}
 	// TODO: Functional options for pulse rate, timeout...
 	for _, opt := range opts {
-		d = opt(d)
+		opt(d)
 	}
 
 	done := make(chan struct{})
@@ -76,7 +81,7 @@ func New(schematic CacheSchematic, opts ...Option) *Doppel {
 	}
 
 	d.startCache()
-	return d
+	return d, nil
 }
 
 type request struct {
@@ -206,4 +211,40 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 // TODO: Implement ErrDoppelClosed.
 func (d *Doppel) Close() {
 	close(d.done)
+}
+
+// IsCyclic reports whether a CacheSchematic contains a cycle. If
+// true, the accompanying error describes which TemplateSchematics
+// form part of the cycle.
+func IsCyclic(cs CacheSchematic) (bool, error) {
+	seen := make(map[string]bool)
+	var recStack []string // track TemplateSchematics already seen in the current traversal
+
+	var visit func(name string) error
+	visit = func(name string) error {
+		for _, seenName := range recStack {
+			if seenName == name {
+				msg := fmt.Sprintf("cycle through %s: %v", name, append(recStack, name))
+				return errors.New(msg)
+			}
+		}
+		recStack = append(recStack, name)
+
+		var err error
+		if !seen[name] {
+			seen[name] = true
+			if ts := cs[name]; ts != nil {
+				err = visit(cs[name].BaseTmplName)
+			}
+		}
+		recStack = recStack[:len(recStack)-1]
+		return err
+	}
+
+	for k := range cs {
+		if err := visit(k); err != nil {
+			return true, err
+		}
+	}
+	return false, nil
 }

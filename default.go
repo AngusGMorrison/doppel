@@ -17,13 +17,15 @@ var defaultCache *Doppel
 //
 // The user is responsible for closing the default cache via the
 // supplied done channel when finished.
-func Initialize(done chan struct{}, schematic CacheSchematic, opts ...Option) {
-	cancelOpt := func(d *Doppel) *Doppel {
+func Initialize(done chan struct{}, schematic CacheSchematic, opts ...Option) error {
+	// TODO: Return error if default cache is already initialized
+	cancelOpt := func(d *Doppel) {
 		d.done = done
-		return d
 	}
 
-	defaultCache = New(schematic, append(opts, cancelOpt)...)
+	var err error
+	defaultCache, err = New(schematic, append(opts, cancelOpt)...)
+	return err
 }
 
 // Get returns a copy of the name template if it exists in the cache,
