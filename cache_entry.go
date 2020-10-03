@@ -1,6 +1,10 @@
 package doppel
 
-import "html/template"
+import (
+	"html/template"
+
+	"github.com/pkg/errors"
+)
 
 type cacheEntry struct {
 	ready chan struct{}
@@ -14,7 +18,9 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
 	var err error
 	select {
 	case <-req.ctx.Done():
-		ce.deliverErr(req.ctx.Err(), req)
+		ce.err = errParseTimeout
+		req.resultStream <- &result{err: req.ctx.Err()}
+		return
 	default:
 	}
 
@@ -35,13 +41,13 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
 	}
 
 	ce.tmpl = tmpl
-	return
 }
 
 func (ce *cacheEntry) deliver(req *request) {
 	select {
 	case <-req.ctx.Done():
-		ce.deliverErr(req.ctx.Err(), req)
+		req.resultStream <- &result{err: req.ctx.Err()}
+		return
 	case <-ce.ready:
 	}
 
@@ -50,16 +56,16 @@ func (ce *cacheEntry) deliver(req *request) {
 		return
 	}
 
+	// Return a copy of the template that can be safely executed
+	// without affecting cached templates.
 	clone, err := ce.tmpl.Clone()
 	if err != nil {
 		req.resultStream <- &result{err: ce.err}
 		return
 	}
 	req.resultStream <- &result{tmpl: clone}
-	return
 }
 
-func (ce *cacheEntry) deliverErr(err error, req *request) {
-	ce.err = err
-	req.resultStream <- &result{err: err}
-}
+// errParseTimeout signals to the cache that parsing may be
+// successfully retried.
+var errParseTimeout = errors.New("timed out while parsing template")

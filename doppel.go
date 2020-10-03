@@ -26,15 +26,10 @@ type Doppel struct {
 	schematic             CacheSchematic
 	err                   error
 	heartbeat             chan struct{}
-	pulseInterval         time.Duration
 }
 
-// A CacheSchematic is a collection of named TemplateSchematics,
-// allowing TemplateSchematics to reference their base templates by
-// name.
-//
-// TODO: Is this the best representation? Would something more
-// explicitly graph-like be an improvement?
+// A CacheSchematic is an acyclic graph of named TemplateSchematics
+// which reference their base templates by name.
 type CacheSchematic map[string]*TemplateSchematic
 
 func (cs CacheSchematic) clone() CacheSchematic {
@@ -88,6 +83,7 @@ type request struct {
 	ctx          context.Context
 	name         string
 	resultStream chan<- *result
+	noCache      bool // TODO: test
 }
 
 type result struct {
@@ -95,15 +91,13 @@ type result struct {
 	err  error
 }
 
-// cacheTemplates is a concurrent, non-blocking cache or templates and
-// sub-templates that runs until cancelled.
+// startCache launches a concurrent, non-blocking cache of templates
+// and sub-templates that runs until cancelled.
 //
 // If an error is generated when attempting to retrieve a template,
 // further requests for that template will return the original error.
 //
 // Each request to the cache is preemptible via its context.
-//
-// TODO: Implement interval heartbeat.
 // TODO: Implement template expiry.
 func (d *Doppel) startCache() {
 	// Create heartbeat and request stream synchronously to ensure
@@ -116,10 +110,11 @@ func (d *Doppel) startCache() {
 		defer close(d.requestStream)
 
 		templates := make(map[string]*cacheEntry)
+
 		for {
 			select {
 			case d.heartbeat <- struct{}{}:
-				// Signals that cache is ready to receive work.
+				// Signals that cache is at the top of its work loop.
 			default:
 			}
 
@@ -135,7 +130,7 @@ func (d *Doppel) startCache() {
 				}
 
 				entry := templates[req.name]
-				if entry == nil {
+				if entry == nil || entry.err == errParseTimeout || req.noCache {
 					tmplSchematic := d.schematic[req.name]
 					if tmplSchematic == nil {
 						req.resultStream <- &result{
@@ -179,7 +174,7 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	// Buffer resultStream to ensure timeout-related errors can
 	// be sent by the cache even after Get returns.
 	resultStream := make(chan *result, 1)
-	req := &request{ctx, name, resultStream}
+	req := &request{ctx, name, resultStream, false}
 
 	select {
 	case <-ctx.Done():
