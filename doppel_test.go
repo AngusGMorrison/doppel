@@ -2,6 +2,7 @@ package doppel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,11 +84,41 @@ func TestNew(t *testing.T) {
 
 	t.Run("returned *Doppel", func(t *testing.T) {
 		t.Run("has a live cache", func(t *testing.T) {
+			d, err := New(schematic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
 
+			const timeout = 1
+			select {
+			case <-d.heartbeat:
+			case <-time.After(timeout * time.Second):
+				t.Errorf("failed to start cache before timeout")
+			}
 		})
 
 		t.Run("accepts requests", func(t *testing.T) {
+			d, err := New(schematic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
 
+			const timeout = 1
+			ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Second)
+			defer cancel()
+
+			req := &request{
+				ctx:          ctx,
+				name:         "base",
+				resultStream: make(chan<- *result, 1),
+			}
+			select {
+			case d.requestStream <- req:
+			case <-ctx.Done():
+				t.Error("request timed out before being accepted")
+			}
 		})
 	})
 }
@@ -122,6 +153,28 @@ func TestHeartbeat(t *testing.T) {
 		if gotHeartbeats != wantHeartbeats {
 			t.Errorf("got %d heartbeats, want %d\n", gotHeartbeats, wantHeartbeats)
 		}
+	})
+}
+
+func TestDoppelGet(t *testing.T) {
+	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {
+		// TODO
+	})
+
+	t.Run("returns an error if the cache has been closed", func(t *testing.T) {
+		// TODO
+	})
+
+	t.Run("returns an error if the request times out", func(t *testing.T) {
+		// TODO
+	})
+
+	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
+		// TODO
+	})
+
+	t.Run("caches errored results", func(t *testing.T) {
+		// TODO
 	})
 }
 
@@ -168,6 +221,10 @@ func TestGet(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("returns an error if called before Initialize", func(t *testing.T) {
+		// TODO
+	})
 }
 
 func TestIsCyclic(t *testing.T) {
@@ -207,4 +264,11 @@ func TestIsCyclic(t *testing.T) {
 			t.Error(err)
 		}
 	})
+}
+
+func TestWithTimeout(t *testing.T) {
+	// TODO
+	// Does it make sense to reattempt timed-out requests, when all
+	// requests will have the same timeout? Do requests need
+	// functional options of their own?
 }
