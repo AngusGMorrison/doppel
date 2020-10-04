@@ -321,5 +321,13 @@ func TestHeartbeat(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	// TODO
+	d, err := New(schematic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	if _, err := d.Get("base"); err != ErrDoppelClosed {
+		t.Errorf("got %v, want ErrDoppelClosed", err)
+	}
 }
