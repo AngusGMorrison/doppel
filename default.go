@@ -17,7 +17,7 @@ var defaultCache *Doppel
 //
 // The user is responsible for closing the default cache via the
 // supplied done channel when finished.
-func Initialize(done chan struct{}, schematic CacheSchematic, opts ...Option) error {
+func Initialize(done chan struct{}, schematic CacheSchematic, opts ...CacheOption) error {
 	// TODO: Return error if default cache is already initialized
 	cancelOpt := func(d *Doppel) {
 		d.done = done
@@ -31,11 +31,15 @@ func Initialize(done chan struct{}, schematic CacheSchematic, opts ...Option) er
 // Get returns a copy of the name template if it exists in the cache,
 // or an error if it does not.
 //
-// If Get is called before Initialize, an error is returned.
+// If Get is called before Initialize, ErrNotInitialized is returned.
 func Get(name string) (*template.Template, error) {
 	if defaultCache == nil {
-		return nil, errors.New("Get was called before initializing the default cache") // TODO: wrap error at boundary
+		return nil, ErrNotInitialized // TODO: wrap error at boundary
 	}
 
 	return defaultCache.Get(name)
 }
+
+// ErrNotInitialized is returned when a Get request is made to the
+// default cache before Initialize is called.
+var ErrNotInitialized = errors.New("Get was called before initializing the default cache")

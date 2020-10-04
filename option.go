@@ -1,8 +1,8 @@
 package doppel
 
-// Option are used to decorate new Doppels, e.g. adding template
+// CacheOption are used to decorate new Doppels, e.g. adding template
 // expiry or memory limits.
-type Option func(*Doppel) // TODO: Ensure custom Options can't affect unexported fields.
+type CacheOption func(*Doppel) // TODO: Ensure custom Options can't affect unexported fields.
 
 // TODO: Implement stale template expiry.
 // func WithExpiry(expireAfter time.Duration) Option {

@@ -65,7 +65,7 @@ func TestNew(t *testing.T) {
 				optsCalled++
 			}
 
-			optArgs := make([]Option, optCount)
+			optArgs := make([]CacheOption, optCount)
 			for i := range optArgs {
 				optArgs[i] = opt
 			}

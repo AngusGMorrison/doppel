@@ -65,7 +65,7 @@ func (ts *TemplateSchematic) Clone() *TemplateSchematic {
 // New configures a new *Doppel and returns it to the caller. It
 // should not be used concurrently with operations on the provided
 // schematic.
-func New(schematic CacheSchematic, opts ...Option) (*Doppel, error) {
+func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 	if cyclic, err := IsCyclic(schematic); cyclic {
 		return nil, err // TODO: Wrap
 	}
@@ -162,14 +162,7 @@ func (d *Doppel) startCache() {
 	}()
 }
 
-// Get returns a named template from the cache. Thread-safe and
-// non-blocking.
-//
-// Template dependencies must be fully specified in the CacheSchematic
-// when the cache is started. If a requested template is missing
-// dependencies, e.g. a nested {{template "name"}} is declared but the
-// parent template is requested in isolation, parsing will fail and
-// Get will return an error.
+// Get returns a named template from the cache. Get is thread-safe.
 func (d *Doppel) Get(name string) (*template.Template, error) {
 	select {
 	case <-d.done:
@@ -208,21 +201,22 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	}
 }
 
-// Heartbeat returns the Doppel's heartbeat channel, which is never
-// nil.
+// Heartbeat returns the Doppel's heartbeat channel, which is
+// guaranteed to be non-nil.
 func (d *Doppel) Heartbeat() <-chan struct{} {
 	return d.heartbeat
 }
 
-// Close waits for the current Get request to complete before closing
-// the Doppel's done channel. Subsequent requests to the Doppel will
-// return ErrDoppelClosed.
-//
-// TODO: Implement ErrDoppelClosed.
+// Close immediately closes the Doppel's done channel. The Doppel's
+// cache will complete the request currently in progress (if any)
+// before returning. Subsequent requests to the Doppel will return
+// ErrDoppelClosed.
 func (d *Doppel) Close() {
 	close(d.done)
 }
 
+// ErrDoppelClosed is returned in response to requests to a Doppel
+// with an closed cache.
 var ErrDoppelClosed = errors.New("the Doppel's cache has already been closed")
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If
