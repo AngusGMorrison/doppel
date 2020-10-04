@@ -74,14 +74,13 @@ func New(schematic CacheSchematic, opts ...Option) (*Doppel, error) {
 		schematic: schematic.Clone(), // prevent race conditions as a result of external access
 	}
 
-	// TODO: Functional options for pulse rate, timeout...
+	// TODO: Functional options for timeout...
 	for _, opt := range opts {
 		opt(d)
 	}
 
-	done := make(chan struct{})
 	if d.done == nil {
-		d.done = done
+		d.done = make(chan struct{})
 	}
 
 	d.startCache()
@@ -152,7 +151,7 @@ func (d *Doppel) startCache() {
 
 					entry = &cacheEntry{ready: make(chan struct{})}
 					templates[req.name] = entry
-					go entry.parse(req, tmplSchematic)
+					go entry.parse(req, tmplSchematic, d)
 				} else if entry.err != nil {
 					req.resultStream <- &result{err: entry.err}
 					continue
@@ -163,11 +162,18 @@ func (d *Doppel) startCache() {
 	}()
 }
 
-// Get returns a named template from the cache. Thread-safe.
+// Get returns a named template from the cache. Thread-safe and
+// non-blocking.
+//
+// Template dependencies must be fully specified in the CacheSchematic
+// when the cache is started. If a requested template is missing
+// dependencies, e.g. a nested {{template "name"}} is declared but the
+// parent template is requested in isolation, parsing will fail and
+// Get will return an error.
 func (d *Doppel) Get(name string) (*template.Template, error) {
 	select {
 	case <-d.done:
-		return nil, errors.New("cache has been closed") // TODO: wrap error at package boundary
+		return nil, ErrDoppelClosed // TODO: wrap error at package boundary
 	default:
 	}
 
@@ -216,6 +222,8 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 func (d *Doppel) Close() {
 	close(d.done)
 }
+
+var ErrDoppelClosed = errors.New("the Doppel's cache has already been closed")
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If
 // true, the accompanying error describes which TemplateSchematics

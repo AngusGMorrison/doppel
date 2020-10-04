@@ -12,7 +12,7 @@ type cacheEntry struct {
 	err   error
 }
 
-func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
+func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	defer close(ce.ready)
 
 	var err error
@@ -28,7 +28,7 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
 	if s.BaseTmplName == "" {
 		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
-		base, err := Get(s.BaseTmplName)
+		base, err := d.Get(s.BaseTmplName)
 		if err != nil {
 			ce.err = err
 			return

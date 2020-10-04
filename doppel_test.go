@@ -12,19 +12,19 @@ import (
 )
 
 var (
-	cwd, _   = os.Getwd()
-	fixtures = filepath.Join(cwd, "test_fixtures")
-	basepath = filepath.Join(fixtures, "base.gohtml")
-	navpath  = filepath.Join(fixtures, "nav.gohtml")
-	body1    = filepath.Join(fixtures, "body_1.gohtml")
-	body2    = filepath.Join(fixtures, "body_2.gohtml")
+	cwd, _    = os.Getwd()
+	fixtures  = filepath.Join(cwd, "test_fixtures")
+	basepath  = filepath.Join(fixtures, "base.gohtml")
+	navpath   = filepath.Join(fixtures, "nav.gohtml")
+	body1Path = filepath.Join(fixtures, "body_1.gohtml")
+	body2Path = filepath.Join(fixtures, "body_2.gohtml")
 )
 
 var schematic = CacheSchematic{
 	"base":      {"", []string{basepath}},
 	"commonNav": {"base", []string{navpath}},
-	"withBody1": {"commonNav", []string{body1}},
-	"withBody2": {"commonNav", []string{body2}},
+	"withBody1": {"commonNav", []string{body1Path}},
+	"withBody2": {"commonNav", []string{body2Path}},
 }
 
 func TestNew(t *testing.T) {
@@ -123,46 +123,89 @@ func TestNew(t *testing.T) {
 	})
 }
 
-func TestHeartbeat(t *testing.T) {
-	t.Run("returns a channel that receives a signal on each new request cycle", func(t *testing.T) {
-		const timeout = 1
-		const wantHeartbeats = 4
-		var gotHeartbeats int
-		d, err := New(schematic)
+func TestDoppelGet(t *testing.T) {
+
+	testCases := []struct {
+		schematicName string
+		files         []string
+	}{
+		{"withBody1", []string{basepath, navpath, body1Path}},
+		{"withBody2", []string{basepath, navpath, body2Path}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("composes and returns %s", tc.schematicName), func(t *testing.T) {
+			d, err := New(schematic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+
+			tmpl, err := d.Get(tc.schematicName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got bytes.Buffer
+			err = tmpl.Execute(&got, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			wantTmpl, err := template.ParseFiles(tc.files...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want bytes.Buffer
+			err = wantTmpl.Execute(&want, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if gotStr, wantStr := got.String(), want.String(); gotStr != wantStr {
+				t.Fatalf("got %v, want %v\n", gotStr, wantStr) // TODO: Display as diff
+			}
+		})
+	}
+
+	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {
+		testSchematic := schematic.Clone()
+		testSchematic["incomplete"] = &TemplateSchematic{
+			BaseTmplName: "missing",
+			Filepaths:    []string{},
+		}
+
+		d, err := New(testSchematic)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer d.Close()
-		hb := d.Heartbeat()
 
-		heartbeatOrTimeout := func() {
-			select {
-			case <-hb:
-				gotHeartbeats++
-			case <-time.After(timeout * time.Second):
-				t.Fatal("timed out before receiving heartbeat")
+		for _, name := range []string{"incomplete", "missing"} {
+			tmpl, err := d.Get(name)
+			if tmpl != nil {
+				t.Errorf("want d.Get(%q) to return nil template, got %+v", name, tmpl)
+			}
+			if err == nil {
+				t.Errorf("d.Get(%q) failed to return an error", name)
 			}
 		}
-
-		heartbeatOrTimeout()
-		for i := 0; i < wantHeartbeats-1; i++ {
-			d.Get("base")
-			heartbeatOrTimeout()
-		}
-
-		if gotHeartbeats != wantHeartbeats {
-			t.Errorf("got %d heartbeats, want %d\n", gotHeartbeats, wantHeartbeats)
-		}
-	})
-}
-
-func TestDoppelGet(t *testing.T) {
-	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {
-		// TODO
 	})
 
 	t.Run("returns an error if the cache has been closed", func(t *testing.T) {
-		// TODO
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Close()
+
+		target := "base"
+		tmpl, err := d.Get(target)
+		if tmpl != nil {
+			t.Errorf("want d.Get(%q) to return nil template, got %+v", target, tmpl)
+		}
+		if err != ErrDoppelClosed {
+			t.Errorf("got %v, want ErrDoppelClosed", err)
+		}
 	})
 
 	t.Run("returns an error if the request times out", func(t *testing.T) {
@@ -174,56 +217,27 @@ func TestDoppelGet(t *testing.T) {
 	})
 
 	t.Run("caches errored results", func(t *testing.T) {
-		// TODO
-	})
-}
+		target, dependency := "withBody1", "base"
+		testSchematic := schematic.Clone()
+		delete(testSchematic, dependency) // cause initial Get for target to error
+		d, err := New(testSchematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
 
-func TestGet(t *testing.T) {
-	testCases := []struct{ schematicName, fileName string }{
-		{"withBody1", "body_1"},
-		{"withBody2", "body_2"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("composes and returns %s", tc.schematicName), func(t *testing.T) {
-			done := make(chan struct{})
-			defer close(done)
-			err := Initialize(done, schematic)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			tmpl, err := Get(tc.schematicName)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var got bytes.Buffer
-			err = tmpl.Execute(&got, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			wantTmpl, err := template.ParseFiles(basepath, navpath,
-				filepath.Join(fixtures, tc.fileName+".gohtml"))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var want bytes.Buffer
-			err = wantTmpl.Execute(&want, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if gotStr, wantStr := got.String(), want.String(); gotStr != wantStr {
-				t.Fatalf("got %v, want %v\n", gotStr, wantStr)
-			}
-		})
-	}
-
-	t.Run("returns an error if called before Initialize", func(t *testing.T) {
-		// TODO
+		_, err = d.Get(target)
+		if err == nil {
+			t.Errorf("d.Get(%q) failed to return an error", target)
+		}
+		// Replace missing dependency. Potential RACE CONDITION – do
+		// not attempt schematic modifications outside test.
+		d.schematic[dependency] = schematic[dependency].Clone()
+		_, err = d.Get(target)
+		if err == nil {
+			t.Errorf("d.Get(%q) failed to return an error after replacing missing dependency",
+				target)
+		}
 	})
 }
 
@@ -271,4 +285,41 @@ func TestWithTimeout(t *testing.T) {
 	// Does it make sense to reattempt timed-out requests, when all
 	// requests will have the same timeout? Do requests need
 	// functional options of their own?
+}
+
+func TestHeartbeat(t *testing.T) {
+	t.Run("returns a channel that receives a signal on each new request cycle", func(t *testing.T) {
+		const timeout = 1
+		const wantHeartbeats = 4
+		var gotHeartbeats int
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+		hb := d.Heartbeat()
+
+		heartbeatOrTimeout := func() {
+			select {
+			case <-hb:
+				gotHeartbeats++
+			case <-time.After(timeout * time.Second):
+				t.Fatal("timed out before receiving heartbeat")
+			}
+		}
+
+		heartbeatOrTimeout()
+		for i := 0; i < wantHeartbeats-1; i++ {
+			d.Get("base")
+			heartbeatOrTimeout()
+		}
+
+		if gotHeartbeats != wantHeartbeats {
+			t.Errorf("got %d heartbeats, want %d\n", gotHeartbeats, wantHeartbeats)
+		}
+	})
+}
+
+func TestClose(t *testing.T) {
+	// TODO
 }
