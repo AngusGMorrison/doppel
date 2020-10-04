@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -196,7 +197,7 @@ func TestDoppelGet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		d.Close()
+		d.Close() // Race condition: close called before done channel created
 
 		target := "base"
 		tmpl, err := d.Get(target)
@@ -208,8 +209,36 @@ func TestDoppelGet(t *testing.T) {
 		}
 	})
 
-	t.Run("returns an error if the request times out", func(t *testing.T) {
-		// TODO
+	t.Run("returns a RequestTimeoutError if the request times out", func(t *testing.T) {
+		// Response time is non-deterministic, so excersise the full
+		// range of preemption points as possible via random testing
+		source := rand.NewSource(time.Now().UnixNano())
+		rng := rand.New(source)
+		for i := 0; i < 100; i++ {
+			timeout := time.Duration(rng.Intn(1000)) * time.Nanosecond
+			d, err := New(schematic, WithGlobalTimeout(timeout))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			target := "withBody1"
+			fmt.Printf("d.Get(%q) with timeout %d ns...\n", target, timeout)
+			tmpl, err := d.Get(target)
+			d.Close()
+			_, ok := err.(RequestTimeoutError)
+			if !ok {
+				if err != nil {
+					t.Errorf("received non-timeout error: %v", err)
+					continue
+				}
+				if tmpl == nil {
+					t.Errorf("d.Get(%q) failed to return template or error", target)
+				}
+				fmt.Println("request completed successfully")
+				continue
+			}
+			fmt.Println("request timed out successfully")
+		}
 	})
 
 	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {

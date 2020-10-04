@@ -1,10 +1,7 @@
 package doppel
 
 import (
-	"bytes"
 	"fmt"
-	"html/template"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -36,54 +33,34 @@ func TestInitialize(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	testCases := []struct{ schematicName, fileName string }{
-		{"withBody1", "body_1"},
-		{"withBody2", "body_2"},
-	}
+	t.Run(fmt.Sprintf("returns the requested template"), func(t *testing.T) {
+		target := "withBody1"
+		done := make(chan struct{})
+		defer close(done)
 
-	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("composes and returns %s", tc.schematicName), func(t *testing.T) {
-			done := make(chan struct{})
-			defer close(done)
-			err := Initialize(done, schematic)
-			if err != nil {
-				t.Fatal(err)
-			}
+		err := Initialize(done, schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotTemplate, err := Get(target)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			tmpl, err := Get(tc.schematicName)
-			if err != nil {
-				t.Fatal(err)
+		// Cursory check to ensure template contains the expected
+		// subtemplates. TestDoppelGet exercises the full logic.
+		for _, name := range []string{"base.gohtml", "nav.gohtml", "body_1.gohtml"} {
+			if subTmpl := gotTemplate.Lookup(name); subTmpl == nil {
+				t.Errorf("received template does not contain subtemplate %s", name)
 			}
-
-			var got bytes.Buffer
-			err = tmpl.Execute(&got, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			wantTmpl, err := template.ParseFiles(basepath, navpath,
-				filepath.Join(fixtures, tc.fileName+".gohtml"))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var want bytes.Buffer
-			err = wantTmpl.Execute(&want, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if gotStr, wantStr := got.String(), want.String(); gotStr != wantStr {
-				t.Fatalf("got %v, want %v\n", gotStr, wantStr)
-			}
-		})
-	}
+		}
+	})
 
 	t.Run("returns an error if called before Initialize", func(t *testing.T) {
-		target := "base"
-		_, err := Get(target)
+		defaultCache = nil
+		_, err := Get("base")
 		if err != ErrNotInitialized {
-			t.Errorf("got %v, want ErrNotInitialized", err)
+			t.Errorf("got err %q, want ErrNotInitialized", err)
 		}
 	})
 }
