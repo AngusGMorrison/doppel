@@ -28,6 +28,8 @@ var schematic = CacheSchematic{
 	"withBody2": {"commonNav", []string{body2Path}},
 }
 
+const gracePeriod = 100 * time.Millisecond
+
 func TestNew(t *testing.T) {
 	t.Run("CacheSchematic operations", func(t *testing.T) {
 		t.Run("returns an error if schematic is cyclic", func(t *testing.T) {
@@ -39,7 +41,7 @@ func TestNew(t *testing.T) {
 			}
 			if d != nil {
 				t.Errorf("got *Doppel %+v, want nil", d)
-				d.Close()
+				d.Shutdown(gracePeriod)
 			}
 		})
 
@@ -49,7 +51,7 @@ func TestNew(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d.Close() // ensures a schematic data race is impossible
+			d.Shutdown(gracePeriod) // ensures a schematic data race is impossible
 
 			d.schematic["base"] = nil
 			if testSchematic["base"] == nil {
@@ -75,7 +77,7 @@ func TestNew(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer d.Shutdown(gracePeriod)
 
 			if optsCalled != optCount {
 				t.Errorf("%d options were called, want %d", optsCalled, optCount)
@@ -91,11 +93,11 @@ func TestNew(t *testing.T) {
 			}
 			defer d.Close()
 
-			const timeout = 1
+			d.Get("anything")
 			select {
 			case <-d.heartbeat:
-			case <-time.After(timeout * time.Second):
-				t.Errorf("failed to start cache before timeout")
+			case <-time.After(1 * time.Second):
+				t.Errorf("failed to receive heartbeat before timeout")
 			}
 		})
 
@@ -104,7 +106,7 @@ func TestNew(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer d.Shutdown(gracePeriod)
 
 			const timeout = 1
 			ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Second)
@@ -125,7 +127,6 @@ func TestNew(t *testing.T) {
 }
 
 func TestDoppelGet(t *testing.T) {
-
 	testCases := []struct {
 		schematicName string
 		files         []string
@@ -140,7 +141,7 @@ func TestDoppelGet(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
+			defer d.Shutdown(gracePeriod)
 
 			tmpl, err := d.Get(tc.schematicName)
 			if err != nil {
@@ -168,6 +169,10 @@ func TestDoppelGet(t *testing.T) {
 		})
 	}
 
+	t.Run("caches parsed templates", func(t *testing.T) {
+		// TODO
+	})
+
 	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {
 		testSchematic := schematic.Clone()
 		testSchematic["incomplete"] = &TemplateSchematic{
@@ -179,7 +184,7 @@ func TestDoppelGet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
+		defer d.Shutdown(gracePeriod)
 
 		for _, name := range []string{"incomplete", "missing"} {
 			tmpl, err := d.Get(name)
@@ -192,52 +197,33 @@ func TestDoppelGet(t *testing.T) {
 		}
 	})
 
-	t.Run("returns an error if the cache has been closed", func(t *testing.T) {
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Close() // Race condition: close called before done channel created
-
-		target := "base"
-		tmpl, err := d.Get(target)
-		if tmpl != nil {
-			t.Errorf("want d.Get(%q) to return nil template, got %+v", target, tmpl)
-		}
-		if err != ErrDoppelClosed {
-			t.Errorf("got %v, want ErrDoppelClosed", err)
-		}
-	})
-
 	t.Run("returns a RequestTimeoutError if the request times out", func(t *testing.T) {
 		// Response time is non-deterministic, so excersise the full
-		// range of preemption points as possible via random testing
+		// range of preemption points via random testing.
 		source := rand.NewSource(time.Now().UnixNano())
 		rng := rand.New(source)
-		for i := 0; i < 100; i++ {
-			timeout := time.Duration(rng.Intn(1000)) * time.Nanosecond
+		for i := 0; i < 50; i++ {
+			timeout := time.Duration(rng.Intn(1e5)) * time.Nanosecond
 			d, err := New(schematic, WithGlobalTimeout(timeout))
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			target := "withBody1"
-			fmt.Printf("d.Get(%q) with timeout %d ns...\n", target, timeout)
-			tmpl, err := d.Get(target)
-			d.Close()
-			_, ok := err.(RequestTimeoutError)
-			if !ok {
-				if err != nil {
-					t.Errorf("received non-timeout error: %v", err)
-					continue
-				}
-				if tmpl == nil {
-					t.Errorf("d.Get(%q) failed to return template or error", target)
-				}
-				fmt.Println("request completed successfully")
+			fmt.Printf("calling d.Get(%q) with timeout %d ns...\n", target, timeout)
+			_, err = d.Get(target)
+			d.Shutdown(gracePeriod)
+			if err == nil {
+				fmt.Println("✔ returned template before timeout")
 				continue
 			}
-			fmt.Println("request timed out successfully")
+			if err != context.DeadlineExceeded {
+				t.Fatalf(
+					"d.Get(%q) with timeout %d µs: got error %q, want context.DeadlineExceeded",
+					target, timeout, err,
+				)
+			}
+			fmt.Println("✔ timed out with context.DeadlineExceeded")
 		}
 	})
 
@@ -253,7 +239,7 @@ func TestDoppelGet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
+		defer d.Shutdown(gracePeriod)
 
 		_, err = d.Get(target)
 		if err == nil {
@@ -320,14 +306,14 @@ func TestHeartbeat(t *testing.T) {
 	t.Run("returns a channel that receives a signal on each new request cycle", func(t *testing.T) {
 		const timeout = 1
 		const wantHeartbeats = 4
-		var gotHeartbeats int
 		d, err := New(schematic)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer d.Close()
-		hb := d.Heartbeat()
 
+		hb := d.Heartbeat()
+		var gotHeartbeats int
 		heartbeatOrTimeout := func() {
 			select {
 			case <-hb:
@@ -337,8 +323,7 @@ func TestHeartbeat(t *testing.T) {
 			}
 		}
 
-		heartbeatOrTimeout()
-		for i := 0; i < wantHeartbeats-1; i++ {
+		for i := 0; i < wantHeartbeats; i++ {
 			d.Get("base")
 			heartbeatOrTimeout()
 		}
@@ -349,14 +334,18 @@ func TestHeartbeat(t *testing.T) {
 	})
 }
 
-func TestClose(t *testing.T) {
+func TestShutdown(t *testing.T) {
 	d, err := New(schematic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Close()
+	d.Shutdown(gracePeriod)
 
 	if _, err := d.Get("base"); err != ErrDoppelClosed {
 		t.Errorf("got %v, want ErrDoppelClosed", err)
 	}
+}
+
+func TestClose(t *testing.T) {
+	// TODO
 }

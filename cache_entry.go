@@ -18,8 +18,7 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	var err error
 	select {
 	case <-req.ctx.Done():
-		ce.err = errParseTimeout
-		req.resultStream <- &result{err: req.ctx.Err()}
+		ce.err = req.ctx.Err()
 		return
 	default:
 	}
@@ -30,7 +29,7 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	} else {
 		base, err := d.Get(s.BaseTmplName)
 		if err != nil {
-			ce.err = err
+			ce.err = err // Bug - this can become a request timeout err from parsing downstream components.
 			return
 		}
 		tmpl, err = base.ParseFiles(s.Filepaths...)
@@ -45,9 +44,9 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 
 func (ce *cacheEntry) deliver(req *request) {
 	select {
-	case <-req.ctx.Done():
-		req.resultStream <- &result{err: req.ctx.Err()}
-		return
+	// case <-req.ctx.Done():
+	// 	req.resultStream <- &result{err: req.ctx.Err()}
+	// 	return
 	case <-ce.ready:
 	}
 

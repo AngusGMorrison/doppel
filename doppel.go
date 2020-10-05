@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -21,14 +20,12 @@ import (
 // program ends, a timeout expires, or a memory threshold has been
 // reached, per user configuration via functional options.
 type Doppel struct {
-	// TODO: Confirm which operations must be protected by mutex
 	globalTimeout time.Duration
-	schematic     CacheSchematic
-	heartbeat     chan struct{}
-
-	mu            sync.Mutex // protects the following fields
-	done          chan struct{}
-	requestStream chan *request
+	schematic     CacheSchematic // TODO: Implement
+	heartbeat     chan struct{}  // signals the start of each work loop
+	requestStream chan *request  // sends requests to the work loop
+	inShutdown    chan struct{}  // signals that graceful shutdown has been triggered
+	done          chan struct{}  // signals that the work loop has returned
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -74,15 +71,15 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 	}
 
 	d := &Doppel{
-		schematic: schematic.Clone(), // prevent race conditions as a result of external access
+		schematic:  schematic.Clone(), // prevent race conditions as a result of external access
+		inShutdown: make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 
 	// TODO: Functional options for timeout...
 	for _, opt := range opts {
 		opt(d)
 	}
-
-	d.Done()
 
 	d.startCache()
 	return d, nil
@@ -116,11 +113,10 @@ func (d *Doppel) startCache() {
 
 	go func() {
 		defer close(d.heartbeat)
-		// defer close(d.requestStream)
+		defer close(d.done)
 
 		templates := make(map[string]*cacheEntry)
-
-		for {
+		for req := range d.requestStream {
 			select {
 			case d.heartbeat <- struct{}{}:
 				// Signals that cache is at the top of its work loop.
@@ -128,76 +124,42 @@ func (d *Doppel) startCache() {
 			}
 
 			select {
-			case <-d.Done():
-				for {
-					select {
-					case <-d.requests():
-					default:
-						close(d.requestStream) // Won't work; channel must be closed on the producer side
-						return
-					}
-				}
-				return // If the done channel is closed and there are pending sends, this is a race
-				// condition. Sometimes the send will resolve first and be fine, but if the close
-				// happens first, this is a panic.
-			case req := <-d.requests():
-				select {
-				case <-req.ctx.Done():
-					req.resultStream <- &result{err: req.ctx.Err()}
-					continue
-				default:
-				}
-
-				entry := templates[req.name]
-				if entry == nil || entry.err == errParseTimeout || req.noCache {
-					tmplSchematic := d.schematic[req.name]
-					if tmplSchematic == nil {
-						req.resultStream <- &result{
-							// TODO: Improve error wrapping
-							err: errors.New(
-								fmt.Sprintf("requested schematic %q not found", req.name)),
-						}
-						continue
-					}
-
-					entry = &cacheEntry{ready: make(chan struct{})}
-					templates[req.name] = entry
-					go entry.parse(req, tmplSchematic, d)
-				} else if entry.err != nil {
-					req.resultStream <- &result{err: entry.err}
-					continue
-				}
-				go entry.deliver(req)
+			case <-req.ctx.Done():
+				req.resultStream <- &result{err: req.ctx.Err()}
+				continue
+			default:
 			}
+
+			entry := templates[req.name]
+			if entry == nil || entry.err == context.DeadlineExceeded || req.noCache {
+				tmplSchematic := d.schematic[req.name]
+				if tmplSchematic == nil {
+					req.resultStream <- &result{
+						// TODO: Improve error wrapping
+						err: errors.New(
+							fmt.Sprintf("requested schematic %q not found", req.name)),
+					}
+					continue
+				}
+
+				entry = &cacheEntry{ready: make(chan struct{})}
+				templates[req.name] = entry
+				go entry.parse(req, tmplSchematic, d)
+			} else if entry.err != nil {
+				req.resultStream <- &result{err: entry.err}
+				continue
+			}
+			go entry.deliver(req)
 		}
 	}()
 }
 
-// TODO: Is this better handled by a context?
-func (d *Doppel) Done() <-chan struct{} {
-	d.mu.Lock()
-	if d.done == nil {
-		d.done = make(chan struct{})
-	}
-	ch := d.done
-	d.mu.Unlock()
-	return ch
-}
-
-// TODO: This probably isn't useful. requestStream is never changed after creation.
-func (d *Doppel) requests() chan *request {
-	d.mu.Lock()
-	ch := d.requestStream
-	d.mu.Unlock()
-	return ch
-}
-
 // Get returns a named template from the cache. Get is thread-safe.
+// TODO: Make Get take a context for timeout and cancellation.
 func (d *Doppel) Get(name string) (*template.Template, error) {
-	done := d.Done()
 	select {
-	case <-done:
-		return nil, ErrDoppelClosed // TODO: wrap error at package boundary
+	case <-d.inShutdown:
+		return nil, ErrDoppelClosed
 	default:
 	}
 
@@ -212,38 +174,15 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 
 	// Buffer resultStream to ensure timeout-related errors can
 	// be sent by the cache even after Get returns.
+	// TODO: Revisit this.
 	resultStream := make(chan *result, 1)
 	req := &request{ctx, name, resultStream, false}
-
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return nil, RequestTimeoutError{ctx.Err()} // TODO: Wrap
-	case d.requests() <- req: // Could potentially be closed, must shut down gracefully
+	d.requestStream <- req
+	res := <-resultStream
+	if res.err != nil {
+		return nil, res.err
 	}
-
-	select {
-	case <-ctx.Done():
-		return nil, RequestTimeoutError{ctx.Err()} // TODO: Wrap
-	case res := <-resultStream:
-		if res.err != nil {
-			select {
-			case <-ctx.Done():
-				return nil, RequestTimeoutError{ctx.Err()}
-			default:
-				return nil, res.err // TODO: wrap error at package boundary
-			}
-		}
-		return res.tmpl, nil
-	}
-}
-
-type RequestTimeoutError struct {
-	err error
-}
-
-func (r RequestTimeoutError) Error() string {
-	return r.err.Error()
+	return res.tmpl, nil
 }
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
@@ -252,14 +191,22 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 	return d.heartbeat
 }
 
-// Close immediately closes the Doppel's done channel. The Doppel's
-// cache will complete the request currently in progress (if any)
-// before returning. Subsequent requests to the Doppel will return
-// ErrDoppelClosed.
+// Shutdown signals to Get that it should immediately stop accepting
+// new requests. It then waits for gracePeriod to elapse before
+// closing the request stream. If any requests are still active when
+// the request stream is closed, Get will panic.
+func (d *Doppel) Shutdown(gracePeriod time.Duration) {
+	close(d.inShutdown)       // signals that Get should no longer accept new requests
+	<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
+	close(d.requestStream)
+}
+
+// Close forces the Doppel to shut down without accepting pending
+// requests. When pending requests are subsequently sent to the
+// request stream, Get will panic.
 func (d *Doppel) Close() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	close(d.done)
+	close(d.inShutdown)
+	close(d.requestStream)
 }
 
 // ErrDoppelClosed is returned in response to requests to a Doppel
