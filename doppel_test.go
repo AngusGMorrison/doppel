@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"text/template"
 	"time"
@@ -348,4 +349,47 @@ func TestShutdown(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	// TODO
+}
+
+// Run StressTest with the -race flag to ensure no race conditions
+// develop under load.
+func Test_StressTest(t *testing.T) {
+	type testResult struct {
+		target string
+		err    error
+	}
+
+	d, err := New(schematic)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	resultStream := make(chan *testResult)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	keys := make([]string, 0, len(schematic))
+	for k := range schematic {
+		keys = append(keys, k)
+	}
+
+	for i := 0; i < 5000; i++ {
+		target := keys[rng.Intn(len(keys))]
+		wg.Add(1)
+		go func(target string) {
+			_, err := d.Get(target)
+			resultStream <- &testResult{target, err}
+			wg.Done()
+		}(target)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultStream)
+	}()
+
+	for res := range resultStream {
+		if res.err != nil {
+			t.Errorf("d.Get(%q) returned error %q", res.target, res.err)
+		}
+	}
 }
