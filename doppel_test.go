@@ -363,6 +363,7 @@ func Test_StressTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer d.Shutdown(gracePeriod)
 
 	var wg sync.WaitGroup
 	resultStream := make(chan *testResult)
@@ -375,11 +376,11 @@ func Test_StressTest(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		target := keys[rng.Intn(len(keys))]
 		wg.Add(1)
-		go func(target string) {
+		go func() {
 			_, err := d.Get(target)
 			resultStream <- &testResult{target, err}
 			wg.Done()
-		}(target)
+		}()
 	}
 
 	go func() {
