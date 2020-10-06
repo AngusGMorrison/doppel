@@ -3,7 +3,6 @@
 package doppel
 
 import (
-	"context"
 	"fmt"
 	"html/template"
 	"time"
@@ -85,7 +84,7 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 }
 
 type request struct {
-	ctx          context.Context
+	done         chan struct{}
 	name         string
 	resultStream chan<- *result
 	noCache      bool // TODO: test
@@ -161,20 +160,27 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	default:
 	}
 
-	var ctx context.Context
+	// var ctx context.Context
+	// if d.globalTimeout > 0 {
+	// 	var cancel context.CancelFunc
+	// 	ctx, cancel = context.WithTimeout(context.Background(), d.globalTimeout)
+	// 	defer cancel()
+	// } else {
+	// 	ctx = context.Background()
+	// }
+
+	var timeout <-chan time.Time
+	var done chan struct{}
 	if d.globalTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), d.globalTimeout)
-		defer cancel()
-	} else {
-		ctx = context.Background()
+		timeout = time.After(d.globalTimeout)
+		done = make(chan struct{})
 	}
 
 	// Buffer resultStream to ensure timeout-related errors can
 	// be sent by the cache even after Get returns.
 	// TODO: Revisit this.
 	resultStream := make(chan *result, 1)
-	req := &request{ctx, name, resultStream, false} // TODO: Should not store context as struct field, use done channel
+	req := &request{name, resultStream, false} // TODO: Should not store context as struct field, use done channel
 	d.requestStream <- req
 
 	select {
