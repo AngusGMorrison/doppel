@@ -256,29 +256,30 @@ func TestDoppelGet(t *testing.T) {
 		// TODO
 	})
 
-	// t.Run("caches errored results", func(t *testing.T) {
-	// 	target, dependency := "withBody1", "base"
-	// 	testSchematic := schematic.Clone()
-	// 	delete(testSchematic, dependency) // cause initial Get for target to error
-	// 	d, err := New(testSchematic)
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-	// 	defer d.Shutdown(gracePeriod)
+	t.Run("caches errored results", func(t *testing.T) {
+		target, dependency := "withBody1", "base"
+		testSchematic := schematic.Clone()
+		delete(testSchematic, dependency) // cause initial Get for target to error
+		d, err := New(testSchematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
 
-	// 	_, err = d.Get(target)
-	// 	if err == nil {
-	// 		t.Errorf("d.Get(%q) failed to return an error", target)
-	// 	}
-	// 	// Replace missing dependency. Potential RACE CONDITION – do
-	// 	// not attempt schematic modifications outside test.
-	// 	d.schematic[dependency] = schematic[dependency].Clone()
-	// 	_, err = d.Get(target)
-	// 	if err == nil {
-	// 		t.Errorf("d.Get(%q) failed to return an error after replacing missing dependency",
-	// 			target)
-	// 	}
-	// })
+		_, err = d.Get(target)
+		if err == nil {
+			t.Errorf("d.Get(%q) failed to return an error", target)
+		}
+		// Replace missing dependency. RACE CONDITION – do
+		// not attempt schematic modifications outside test.
+		// TODO: Can this be improved with locks?
+		d.schematic[dependency] = schematic[dependency].Clone()
+		_, err = d.Get(target)
+		if err == nil {
+			t.Errorf("d.Get(%q) failed to return an error after replacing missing dependency",
+				target)
+		}
+	})
 }
 
 func TestIsCyclic(t *testing.T) {
