@@ -84,7 +84,7 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 }
 
 type request struct {
-	done         chan struct{}
+	done         <-chan struct{}
 	name         string
 	resultStream chan<- *result
 	noCache      bool // TODO: test
@@ -121,12 +121,11 @@ func (d *Doppel) startCache() {
 			default:
 			}
 
-			// select {
-			// case <-req.ctx.Done():
-			// 	req.resultStream <- &result{err: req.ctx.Err()}
-			// 	continue
-			// default:
-			// }
+			select {
+			case <-req.done:
+				continue
+			default:
+			}
 
 			entry := templates[req.name]
 			if entry == nil || entry.shouldRetry(req) {
@@ -160,32 +159,27 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	default:
 	}
 
-	// var ctx context.Context
-	// if d.globalTimeout > 0 {
-	// 	var cancel context.CancelFunc
-	// 	ctx, cancel = context.WithTimeout(context.Background(), d.globalTimeout)
-	// 	defer cancel()
-	// } else {
-	// 	ctx = context.Background()
-	// }
-
 	var timeout <-chan time.Time
-	var done chan struct{}
 	if d.globalTimeout > 0 {
 		timeout = time.After(d.globalTimeout)
-		done = make(chan struct{})
 	}
 
-	// Buffer resultStream to ensure timeout-related errors can
-	// be sent by the cache even after Get returns.
-	// TODO: Revisit this.
+	done := make(chan struct{})
+	// Buffer resultStream for cases where timeout expires concurrently with results being sent
 	resultStream := make(chan *result, 1)
-	req := &request{name, resultStream, false} // TODO: Should not store context as struct field, use done channel
-	d.requestStream <- req
+	req := &request{done, name, resultStream, false} // TODO: Should not store context as struct field, use done channel
 
 	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-timeout:
+		close(done)
+		return nil, ErrRequestTimeout
+	case d.requestStream <- req:
+	}
+
+	select {
+	case <-timeout:
+		close(done)
+		return nil, ErrRequestTimeout
 	case res := <-resultStream:
 		if res.err != nil {
 			return nil, res.err
@@ -193,6 +187,8 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 		return res.tmpl, nil
 	}
 }
+
+var ErrRequestTimeout = errors.New("request timed out") // TODO: Improve
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
 // guaranteed to be non-nil.

@@ -3,8 +3,6 @@ package doppel
 import (
 	"context"
 	"html/template"
-
-	"github.com/pkg/errors"
 )
 
 type cacheEntry struct {
@@ -22,12 +20,12 @@ func (ce *cacheEntry) shouldRetry(req *request) bool {
 func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	defer close(ce.ready)
 
-	// select {
-	// case <-req.ctx.Done():
-	// 	ce.err = req.ctx.Err()
-	// 	return
-	// default:
-	// }
+	select {
+	case <-req.done:
+		ce.err = ErrRequestTimeout
+		return
+	default:
+	}
 
 	var tmpl *template.Template
 	var err error
@@ -36,9 +34,17 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	} else {
 		base, err := d.Get(s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
 		if err != nil {
-			ce.err = err // Bug - this can become a request timeout err from parsing downstream components.
+			ce.err = err
 			return
 		}
+
+		select {
+		case <-req.done:
+			ce.err = ErrRequestTimeout
+			return
+		default:
+		}
+
 		tmpl, err = base.ParseFiles(s.Filepaths...)
 	}
 	if err != nil {
@@ -51,9 +57,8 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 
 func (ce *cacheEntry) deliver(req *request) {
 	select {
-	// case <-req.ctx.Done():
-	// 	req.resultStream <- &result{err: req.ctx.Err()}
-	// 	return
+	case <-req.done:
+		return
 	case <-ce.ready:
 	}
 
@@ -71,7 +76,3 @@ func (ce *cacheEntry) deliver(req *request) {
 	}
 	req.resultStream <- &result{tmpl: clone}
 }
-
-// errParseTimeout signals to the cache that parsing may be
-// successfully retried.
-var errParseTimeout = errors.New("timed out while parsing template")

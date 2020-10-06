@@ -2,7 +2,6 @@ package doppel
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -109,18 +108,15 @@ func TestNew(t *testing.T) {
 			}
 			defer d.Shutdown(gracePeriod)
 
-			const timeout = 1
-			ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Second)
-			defer cancel()
-
 			req := &request{
-				ctx:          ctx,
+				done:         make(chan struct{}),
 				name:         "base",
 				resultStream: make(chan<- *result, 1),
 			}
+
 			select {
 			case d.requestStream <- req:
-			case <-ctx.Done():
+			case <-time.After(1 * time.Second):
 				t.Error("request timed out before being accepted")
 			}
 		})
@@ -199,7 +195,6 @@ func TestDoppelGet(t *testing.T) {
 	})
 
 	t.Run("returns context.DeadlineExceeded if the request times out", func(t *testing.T) {
-		// TODO: Parallelize
 		// Response time is non-deterministic, so excersise the full
 		// range of preemption points via random testing.
 		type testResult struct {
@@ -217,7 +212,7 @@ func TestDoppelGet(t *testing.T) {
 		count := 50
 		wg.Add(count)
 		for i := 0; i < count; i++ {
-			timeout := time.Duration(rng.Intn(2e4)) * time.Microsecond
+			timeout := time.Duration(rng.Intn(1e4)) * time.Microsecond
 
 			go func(target string, timeout time.Duration) {
 				result := &testResult{target: target, timeout: timeout}
@@ -229,8 +224,7 @@ func TestDoppelGet(t *testing.T) {
 				}
 				defer d.Shutdown(gracePeriod)
 
-				tmpl, err := d.Get(target)
-				fmt.Println(tmpl)
+				_, err = d.Get(target)
 				result.err = err
 				resultStream <- result
 				wg.Done()
@@ -247,11 +241,11 @@ func TestDoppelGet(t *testing.T) {
 			switch res.err {
 			case nil:
 				fmt.Println("✔ returned template before timeout")
-			case context.DeadlineExceeded:
-				fmt.Println("✔ timed out with context.DeadlineExceeded")
+			case ErrRequestTimeout:
+				fmt.Println("✔ timed out with ErrRequestTimeout")
 			default:
 				t.Fatalf(
-					"d.Get(%q) with timeout %d µs: got error %q, want context.DeadlineExceeded",
+					"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
 					res.target, res.timeout/1e3, res.err,
 				)
 			}
