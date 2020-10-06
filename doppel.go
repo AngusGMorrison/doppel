@@ -21,11 +21,11 @@ import (
 // reached, per user configuration via functional options.
 type Doppel struct {
 	globalTimeout time.Duration
-	schematic     CacheSchematic // TODO: Implement
-	heartbeat     chan struct{}  // signals the start of each work loop
-	requestStream chan *request  // sends requests to the work loop
-	inShutdown    chan struct{}  // signals that graceful shutdown has been triggered
-	done          chan struct{}  // signals that the work loop has returned
+	schematic     CacheSchematic
+	heartbeat     chan struct{} // signals the start of each work loop
+	requestStream chan *request // sends requests to the work loop
+	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
+	done          chan struct{} // signals that the work loop has returned
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -76,7 +76,6 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 		done:       make(chan struct{}),
 	}
 
-	// TODO: Functional options for timeout...
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -123,19 +122,18 @@ func (d *Doppel) startCache() {
 			default:
 			}
 
-			select {
-			case <-req.ctx.Done():
-				req.resultStream <- &result{err: req.ctx.Err()}
-				continue
-			default:
-			}
+			// select {
+			// case <-req.ctx.Done():
+			// 	req.resultStream <- &result{err: req.ctx.Err()}
+			// 	continue
+			// default:
+			// }
 
 			entry := templates[req.name]
-			if entry == nil || entry.err == context.DeadlineExceeded || req.noCache {
+			if entry == nil || entry.shouldRetry(req) {
 				tmplSchematic := d.schematic[req.name]
 				if tmplSchematic == nil {
 					req.resultStream <- &result{
-						// TODO: Improve error wrapping
 						err: errors.New(
 							fmt.Sprintf("requested schematic %q not found", req.name)),
 					}
@@ -176,13 +174,18 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	// be sent by the cache even after Get returns.
 	// TODO: Revisit this.
 	resultStream := make(chan *result, 1)
-	req := &request{ctx, name, resultStream, false}
+	req := &request{ctx, name, resultStream, false} // TODO: Should not store context as struct field, use done channel
 	d.requestStream <- req
-	res := <-resultStream
-	if res.err != nil {
-		return nil, res.err
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-resultStream:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return res.tmpl, nil
 	}
-	return res.tmpl, nil
 }
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
@@ -233,7 +236,7 @@ func IsCyclic(cs CacheSchematic) (bool, error) {
 		var err error
 		if !seen[name] {
 			seen[name] = true
-			if ts := cs[name]; ts != nil {
+			if tmplSchematic := cs[name]; tmplSchematic != nil {
 				err = visit(cs[name].BaseTmplName)
 			}
 		}

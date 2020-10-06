@@ -198,33 +198,63 @@ func TestDoppelGet(t *testing.T) {
 		}
 	})
 
-	t.Run("returns a RequestTimeoutError if the request times out", func(t *testing.T) {
+	t.Run("returns context.DeadlineExceeded if the request times out", func(t *testing.T) {
+		// TODO: Parallelize
 		// Response time is non-deterministic, so excersise the full
 		// range of preemption points via random testing.
+		type testResult struct {
+			target  string
+			timeout time.Duration
+			err     error
+		}
+
+		resultStream := make(chan *testResult)
 		source := rand.NewSource(time.Now().UnixNano())
 		rng := rand.New(source)
-		for i := 0; i < 50; i++ {
-			timeout := time.Duration(rng.Intn(1e5)) * time.Nanosecond
-			d, err := New(schematic, WithGlobalTimeout(timeout))
-			if err != nil {
-				t.Fatal(err)
-			}
+		target := "withBody1"
 
-			target := "withBody1"
-			fmt.Printf("calling d.Get(%q) with timeout %d ns...\n", target, timeout)
-			_, err = d.Get(target)
-			d.Shutdown(gracePeriod)
-			if err == nil {
+		var wg sync.WaitGroup
+		count := 50
+		wg.Add(count)
+		for i := 0; i < count; i++ {
+			timeout := time.Duration(rng.Intn(2e4)) * time.Microsecond
+
+			go func(target string, timeout time.Duration) {
+				result := &testResult{target: target, timeout: timeout}
+
+				d, err := New(schematic, WithGlobalTimeout(timeout))
+				if err != nil {
+					result.err = err
+					resultStream <- result
+				}
+				defer d.Shutdown(gracePeriod)
+
+				tmpl, err := d.Get(target)
+				fmt.Println(tmpl)
+				result.err = err
+				resultStream <- result
+				wg.Done()
+			}(target, timeout)
+		}
+
+		go func() {
+			wg.Wait()
+			close(resultStream)
+		}()
+
+		for res := range resultStream {
+			fmt.Printf("calling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
+			switch res.err {
+			case nil:
 				fmt.Println("✔ returned template before timeout")
-				continue
-			}
-			if err != context.DeadlineExceeded {
+			case context.DeadlineExceeded:
+				fmt.Println("✔ timed out with context.DeadlineExceeded")
+			default:
 				t.Fatalf(
 					"d.Get(%q) with timeout %d µs: got error %q, want context.DeadlineExceeded",
-					target, timeout, err,
+					res.target, res.timeout/1e3, res.err,
 				)
 			}
-			fmt.Println("✔ timed out with context.DeadlineExceeded")
 		}
 	})
 
@@ -232,29 +262,29 @@ func TestDoppelGet(t *testing.T) {
 		// TODO
 	})
 
-	t.Run("caches errored results", func(t *testing.T) {
-		target, dependency := "withBody1", "base"
-		testSchematic := schematic.Clone()
-		delete(testSchematic, dependency) // cause initial Get for target to error
-		d, err := New(testSchematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer d.Shutdown(gracePeriod)
+	// t.Run("caches errored results", func(t *testing.T) {
+	// 	target, dependency := "withBody1", "base"
+	// 	testSchematic := schematic.Clone()
+	// 	delete(testSchematic, dependency) // cause initial Get for target to error
+	// 	d, err := New(testSchematic)
+	// 	if err != nil {
+	// 		t.Fatal(err)
+	// 	}
+	// 	defer d.Shutdown(gracePeriod)
 
-		_, err = d.Get(target)
-		if err == nil {
-			t.Errorf("d.Get(%q) failed to return an error", target)
-		}
-		// Replace missing dependency. Potential RACE CONDITION – do
-		// not attempt schematic modifications outside test.
-		d.schematic[dependency] = schematic[dependency].Clone()
-		_, err = d.Get(target)
-		if err == nil {
-			t.Errorf("d.Get(%q) failed to return an error after replacing missing dependency",
-				target)
-		}
-	})
+	// 	_, err = d.Get(target)
+	// 	if err == nil {
+	// 		t.Errorf("d.Get(%q) failed to return an error", target)
+	// 	}
+	// 	// Replace missing dependency. Potential RACE CONDITION – do
+	// 	// not attempt schematic modifications outside test.
+	// 	d.schematic[dependency] = schematic[dependency].Clone()
+	// 	_, err = d.Get(target)
+	// 	if err == nil {
+	// 		t.Errorf("d.Get(%q) failed to return an error after replacing missing dependency",
+	// 			target)
+	// 	}
+	// })
 }
 
 func TestIsCyclic(t *testing.T) {

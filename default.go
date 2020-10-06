@@ -18,7 +18,7 @@ var defaultCache *Doppel
 // The user is responsible for closing the default cache using
 // Shutdown or Done when finished.
 func Initialize(schematic CacheSchematic, opts ...CacheOption) error {
-	if defaultCache != nil { // TODO: Test
+	if defaultCache != nil {
 		select {
 		case <-defaultCache.done:
 		default:

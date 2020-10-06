@@ -1,6 +1,7 @@
 package doppel
 
 import (
+	"context"
 	"html/template"
 
 	"github.com/pkg/errors"
@@ -12,22 +13,28 @@ type cacheEntry struct {
 	err   error
 }
 
+func (ce *cacheEntry) shouldRetry(req *request) bool {
+	return ce.err == context.DeadlineExceeded ||
+		ce.err == context.Canceled ||
+		req.noCache
+}
+
 func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	defer close(ce.ready)
 
-	var err error
-	select {
-	case <-req.ctx.Done():
-		ce.err = req.ctx.Err()
-		return
-	default:
-	}
+	// select {
+	// case <-req.ctx.Done():
+	// 	ce.err = req.ctx.Err()
+	// 	return
+	// default:
+	// }
 
 	var tmpl *template.Template
+	var err error
 	if s.BaseTmplName == "" {
 		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
-		base, err := d.Get(s.BaseTmplName)
+		base, err := d.Get(s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
 		if err != nil {
 			ce.err = err // Bug - this can become a request timeout err from parsing downstream components.
 			return
