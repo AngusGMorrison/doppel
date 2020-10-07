@@ -3,12 +3,12 @@ package doppel
 import (
 	"bytes"
 	"fmt"
+	"html/template"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
-	"text/template"
 	"time"
 )
 
@@ -361,19 +361,56 @@ func TestHeartbeat(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
+	type testResult struct {
+		tmpl *template.Template
+		err  error
+	}
+
 	d, err := New(schematic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Shutdown(gracePeriod)
+	go d.Shutdown(500 * time.Millisecond)
 
-	if _, err := d.Get("base"); err != ErrDoppelClosed {
-		t.Errorf("got %v, want ErrDoppelClosed", err)
+	hb := d.Heartbeat()
+	select {
+	case <-hb:
+		t.Errorf("heartbeat was closed before graceful shutdown period elapsed")
+	case <-time.After(450 * time.Millisecond):
+	}
+
+	select {
+	case <-hb:
+	case <-time.After(500 * time.Millisecond):
+		t.Errorf("heartbeat failed to close")
+	}
+
+	tmpl, err := d.Get("base")
+	if tmpl != nil {
+		t.Error("Doppel accepted and completed new request after shutdown")
+	}
+	if err != ErrDoppelClosed {
+		t.Errorf("got err %v, want ErrDoppelClosed", err)
 	}
 }
 
 func TestClose(t *testing.T) {
-	// TODO
+	d, err := New(schematic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	hb := d.Heartbeat()
+	select {
+	case <-hb:
+	case <-time.After(500 * time.Millisecond):
+		t.Errorf("heartbeat failed to close")
+	}
+
+	if _, err := d.Get("base"); err != ErrDoppelClosed {
+		t.Errorf("got %v, want ErrDoppelClosed", err)
+	}
 }
 
 // Run StressTest with the -race flag to ensure no race conditions

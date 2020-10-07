@@ -6,18 +6,18 @@ import (
 )
 
 func TestInitialize(t *testing.T) {
-	t.Run("assigns a new *Doppel with a live cache to defaultCache", func(t *testing.T) {
+	t.Run("assigns a new *Doppel with a live cache to globalCache", func(t *testing.T) {
 		err := Initialize(schematic)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer Close()
-		if defaultCache == nil {
-			t.Fatal("failed to assign defaultCache")
+		if globalCache == nil {
+			t.Fatal("failed to assign globalCache")
 		}
 	})
 
-	t.Run("returns an error if the default cache is already initialized", func(t *testing.T) {
+	t.Run("returns an error if the global cache is already initialized", func(t *testing.T) {
 		err := Initialize(schematic)
 		if err != nil {
 			t.Fatal(err)
@@ -54,7 +54,7 @@ func TestGet(t *testing.T) {
 	})
 
 	t.Run("returns an error if called before Initialize", func(t *testing.T) {
-		defaultCache = nil
+		globalCache = nil
 		_, err := Get("base")
 		if err != ErrNotInitialized {
 			t.Errorf("got err %q, want ErrNotInitialized", err)
