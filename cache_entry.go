@@ -1,6 +1,9 @@
 package doppel
 
-import "html/template"
+import (
+	"context"
+	"html/template"
+)
 
 type cacheEntry struct {
 	ready chan struct{}
@@ -8,25 +11,40 @@ type cacheEntry struct {
 	err   error
 }
 
-func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
+func (ce *cacheEntry) shouldRetry(req *request) bool {
+	return ce.err == context.DeadlineExceeded ||
+		ce.err == context.Canceled ||
+		req.noCache
+}
+
+func (ce *cacheEntry) parse(req *request, s *TemplateSchematic, d *Doppel) {
 	defer close(ce.ready)
 
-	var err error
 	select {
-	case <-req.ctx.Done():
-		ce.deliverErr(req.ctx.Err(), req)
+	case <-req.done:
+		ce.err = ErrRequestTimeout
+		return
 	default:
 	}
 
 	var tmpl *template.Template
+	var err error
 	if s.BaseTmplName == "" {
 		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
-		base, err := Get(s.BaseTmplName)
+		base, err := d.Get(s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
 		if err != nil {
 			ce.err = err
 			return
 		}
+
+		select {
+		case <-req.done:
+			ce.err = ErrRequestTimeout
+			return
+		default:
+		}
+
 		tmpl, err = base.ParseFiles(s.Filepaths...)
 	}
 	if err != nil {
@@ -35,13 +53,12 @@ func (ce *cacheEntry) parse(req *request, s *TemplateSchematic) {
 	}
 
 	ce.tmpl = tmpl
-	return
 }
 
 func (ce *cacheEntry) deliver(req *request) {
 	select {
-	case <-req.ctx.Done():
-		ce.deliverErr(req.ctx.Err(), req)
+	case <-req.done:
+		return
 	case <-ce.ready:
 	}
 
@@ -50,16 +67,12 @@ func (ce *cacheEntry) deliver(req *request) {
 		return
 	}
 
+	// Return a copy of the template that can be safely executed
+	// without affecting cached templates.
 	clone, err := ce.tmpl.Clone()
 	if err != nil {
 		req.resultStream <- &result{err: ce.err}
 		return
 	}
 	req.resultStream <- &result{tmpl: clone}
-	return
-}
-
-func (ce *cacheEntry) deliverErr(err error, req *request) {
-	ce.err = err
-	req.resultStream <- &result{err: err}
 }
