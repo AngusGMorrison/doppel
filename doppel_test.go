@@ -26,6 +26,7 @@ var schematic = CacheSchematic{
 	"commonNav": {"base", []string{navpath}},
 	"withBody1": {"commonNav", []string{body1Path}},
 	"withBody2": {"commonNav", []string{body2Path}},
+	"error":     {"", []string{"missing"}},
 }
 
 const gracePeriod = 100 * time.Millisecond
@@ -167,7 +168,7 @@ func TestDoppelGet(t *testing.T) {
 	}
 
 	t.Run("caches parsed templates", func(t *testing.T) {
-		// TODO
+		// TODO: Requires logger
 	})
 
 	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {
@@ -253,32 +254,21 @@ func TestDoppelGet(t *testing.T) {
 	})
 
 	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
-		// TODO
+		// TODO: Requires request timeout
 	})
 
 	t.Run("caches errored results", func(t *testing.T) {
-		target, dependency := "withBody1", "base"
-		testSchematic := schematic.Clone()
-		delete(testSchematic, dependency) // cause initial Get for target to error
-		d, err := New(testSchematic)
+		d, err := New(schematic)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer d.Shutdown(gracePeriod)
 
-		_, err = d.Get(target)
-		if err == nil {
-			t.Errorf("d.Get(%q) failed to return an error", target)
+		_, err = d.Get("error")
+		if err != nil {
+			t.Error("d.Get(\"error\") failed to return an error")
 		}
-		// Replace missing dependency. RACE CONDITION – do
-		// not attempt schematic modifications outside test.
-		// TODO: Can this be improved with locks?
-		d.schematic[dependency] = schematic[dependency].Clone()
-		_, err = d.Get(target)
-		if err == nil {
-			t.Errorf("d.Get(%q) failed to return an error after replacing missing dependency",
-				target)
-		}
+		// TODO: Solve with logger
 	})
 }
 
