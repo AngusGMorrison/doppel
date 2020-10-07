@@ -25,6 +25,7 @@ type Doppel struct {
 	requestStream chan *request // sends requests to the work loop
 	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
 	done          chan struct{} // signals that the work loop has returned
+	log           logger
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -61,6 +62,18 @@ func (ts *TemplateSchematic) Clone() *TemplateSchematic {
 	return dest
 }
 
+type logger interface {
+	Printf(fmt string, args ...interface{})
+}
+
+// defaultLog provides a no-op logger to avoid a series of nil checks throughout
+// the cache's work loop.
+type defaultLog struct{}
+
+func (d *defaultLog) Printf(fmt string, args ...interface{}) {
+	// No-op.
+}
+
 // New configures a new *Doppel and returns it to the caller. It
 // should not be used concurrently with operations on the provided
 // schematic.
@@ -77,6 +90,10 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 
 	for _, opt := range opts {
 		opt(d)
+	}
+
+	if d.log == nil {
+		d.log = &defaultLog{}
 	}
 
 	d.startCache()
@@ -115,6 +132,7 @@ func (d *Doppel) startCache() {
 
 		templates := make(map[string]*cacheEntry)
 		for req := range d.requestStream {
+			d.log.Printf("received request for template %q\n", req.name)
 			select {
 			case d.heartbeat <- struct{}{}:
 				// Signals that cache is at the top of its work loop.
@@ -123,29 +141,27 @@ func (d *Doppel) startCache() {
 
 			select {
 			case <-req.done:
+				d.log.Printf("request for template %q cancelled", req.name)
 				continue
 			default:
 			}
 
 			entry := templates[req.name]
 			if entry == nil || entry.shouldRetry(req) {
+				d.log.Printf("parsing template %q\n", req.name)
 				tmplSchematic := d.schematic[req.name]
 				if tmplSchematic == nil {
-					req.resultStream <- &result{
-						err: errors.New(
-							fmt.Sprintf("requested schematic %q not found", req.name)),
-					}
+					msg := fmt.Sprintf("missing schematic for template %q", req.name)
+					d.log.Printf(msg)
+					req.resultStream <- &result{err: errors.New(msg)}
 					continue
 				}
 
 				entry = &cacheEntry{ready: make(chan struct{})}
 				templates[req.name] = entry
-				go entry.parse(req, tmplSchematic, d)
-			} else if entry.err != nil {
-				req.resultStream <- &result{err: entry.err}
-				continue
+				go d.parse(entry, req, tmplSchematic)
 			}
-			go entry.deliver(req)
+			go d.deliver(entry, req)
 		}
 	}()
 }
@@ -201,9 +217,11 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 // closing the request stream. If any requests are still active when
 // the request stream is closed, Get will panic.
 func (d *Doppel) Shutdown(gracePeriod time.Duration) {
-	close(d.inShutdown)       // signals that Get should no longer accept new requests
+	close(d.inShutdown) // signals that Get should no longer accept new requests
+	d.log.Printf("shutting down gracefully...\n")
 	<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
 	close(d.requestStream)
+	d.log.Printf("shutdown complete\n")
 }
 
 // Close forces the Doppel to shut down without accepting pending

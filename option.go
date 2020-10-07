@@ -14,6 +14,13 @@ func WithGlobalTimeout(timeout time.Duration) CacheOption {
 	}
 }
 
+// WithLogger allows the user to specify a logger to be embedded in the Doppel.
+func WithLogger(log logger) CacheOption {
+	return func(d *Doppel) {
+		d.log = log
+	}
+}
+
 // TODO: Implement stale template expiry.
 // func WithExpiry(expireAfter time.Duration) Option {
 
