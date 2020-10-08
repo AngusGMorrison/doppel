@@ -196,7 +196,11 @@ func (d *Doppel) Get(name string, opts ...RequestOption) (*template.Template, er
 	if d.globalTimeout > 0 && d.globalTimeout < req.timeout {
 		req.timeout = d.globalTimeout
 	}
-	timeout := time.After(req.timeout)
+
+	var timeout <-chan time.Time
+	if req.timeout > 0 {
+		timeout = time.After(req.timeout)
+	}
 
 	select {
 	case <-timeout:

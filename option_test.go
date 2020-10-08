@@ -2,14 +2,35 @@ package doppel
 
 import (
 	"bytes"
-	"log"
+	"fmt"
+	"sync"
 	"testing"
 )
 
+// Go's log package recycles its buffer for each log entry, causing a data
+// race if the buffer is accessed externally to the logger while logging is
+// ongoing. testLogger preserves its buffer for analysis and protects it with
+// a mutex.
+type testLogger struct {
+	mu  sync.Mutex
+	out *bytes.Buffer
+}
+
+func (tl *testLogger) Printf(msg string, data ...interface{}) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	fmt.Fprintf(tl.out, msg, data...)
+}
+
+func (tl *testLogger) String() string {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return tl.out.String()
+}
+
 func TestWithLogger(t *testing.T) {
 	t.Run("logs cache operations to the logger provded", func(t *testing.T) {
-		var buf bytes.Buffer
-		l := log.New(&buf, "", 0)
+		l := &testLogger{out: &bytes.Buffer{}}
 		d, err := New(schematic, WithLogger(l))
 		if err != nil {
 			t.Fatal(err)
@@ -17,9 +38,10 @@ func TestWithLogger(t *testing.T) {
 		defer d.Shutdown(gracePeriod)
 		d.Get("withBody1")
 
-		if gotLogs := buf.String(); gotLogs == "" {
+		if gotLogs := l.String(); gotLogs == "" {
 			t.Error("failed to log operation, got empty string")
 		}
+		fmt.Println(l.String())
 	})
 
 	// TODO: Test for specific logging events.

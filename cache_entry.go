@@ -22,7 +22,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 
 	select {
 	case <-req.done:
-		d.log.Printf("request for template %q cancelled", req.name)
+		d.log.Printf("request for template %q cancelled\n", req.name)
 		ce.err = ErrRequestTimeout
 		return
 	default:
@@ -33,7 +33,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 	if s.BaseTmplName == "" {
 		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
-		d.log.Printf("fetching base template %q for %q", s.BaseTmplName, req.name)
+		d.log.Printf("fetching base template %q for %q\n", s.BaseTmplName, req.name)
 		base, err := d.Get(s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
 		if err != nil {
 			ce.err = err
@@ -42,7 +42,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 
 		select {
 		case <-req.done:
-			d.log.Printf("request for template %q cancelled", req.name)
+			d.log.Printf("request for template %q cancelled\n", req.name)
 			ce.err = ErrRequestTimeout
 			return
 		default:
@@ -51,25 +51,25 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 		tmpl, err = base.ParseFiles(s.Filepaths...)
 	}
 	if err != nil {
-		d.log.Printf("parsing error for template %q", req.name)
+		d.log.Printf("parsing error for template %q\n", req.name)
 		ce.err = err
 		return
 	}
 
-	d.log.Printf("template %q parsed successfully", req.name)
+	d.log.Printf("template %q parsed successfully\n", req.name)
 	ce.tmpl = tmpl
 }
 
 func (d *Doppel) deliver(ce *cacheEntry, req *request) {
 	select {
 	case <-req.done:
-		d.log.Printf("request for template %q cancelled", req.name)
+		d.log.Printf("request for template %q cancelled\n", req.name)
 		return
 	case <-ce.ready:
 	}
 
 	if ce.err != nil {
-		d.log.Printf("found cached error for template %q", req.name)
+		d.log.Printf("found cached error for template %q\n", req.name)
 		req.resultStream <- &result{err: ce.err}
 		return
 	}
@@ -78,10 +78,10 @@ func (d *Doppel) deliver(ce *cacheEntry, req *request) {
 	// without affecting cached templates.
 	clone, err := ce.tmpl.Clone()
 	if err != nil {
-		d.log.Printf("error cloning template %q: %v", req.name, err)
+		d.log.Printf("error cloning template %q: %v\n", req.name, err)
 		req.resultStream <- &result{err: ce.err}
 		return
 	}
-	d.log.Printf("delivering template %q", req.name)
+	d.log.Printf("delivering template %q\n", req.name)
 	req.resultStream <- &result{tmpl: clone}
 }
