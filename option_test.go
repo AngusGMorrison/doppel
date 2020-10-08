@@ -19,7 +19,7 @@ type testLogger struct {
 func (tl *testLogger) Printf(msg string, data ...interface{}) {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
-	fmt.Fprintf(tl.out, msg, data...)
+	fmt.Fprintf(tl.out, msg+"\n", data...)
 }
 
 func (tl *testLogger) String() string {

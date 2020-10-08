@@ -134,7 +134,7 @@ func (d *Doppel) startCache() {
 
 		templates := make(map[string]*cacheEntry)
 		for req := range d.requestStream {
-			d.log.Printf("received request for template %q\n", req.name)
+			d.log.Printf("received request for template %q", req.name)
 			select {
 			case d.heartbeat <- struct{}{}:
 				// Signals that cache is at the top of its work loop.
@@ -150,7 +150,7 @@ func (d *Doppel) startCache() {
 
 			entry := templates[req.name]
 			if entry == nil || entry.shouldRetry(req) {
-				d.log.Printf("parsing template %q\n", req.name)
+				d.log.Printf("parsing template %q", req.name)
 				tmplSchematic := d.schematic[req.name]
 				if tmplSchematic == nil {
 					msg := fmt.Sprintf("missing schematic for template %q", req.name)
@@ -242,10 +242,10 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 // the request stream is closed, Get will panic.
 func (d *Doppel) Shutdown(gracePeriod time.Duration) {
 	close(d.inShutdown) // signals that Get should no longer accept new requests
-	d.log.Printf("shutting down gracefully...\n")
+	d.log.Printf("shutting down gracefully...")
 	<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
 	close(d.requestStream)
-	d.log.Printf("shutdown complete\n")
+	d.log.Printf("shutdown complete")
 }
 
 // Close forces the Doppel to shut down without accepting pending
