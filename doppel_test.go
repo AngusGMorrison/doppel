@@ -315,13 +315,6 @@ func TestIsCyclic(t *testing.T) {
 	})
 }
 
-func TestWithTimeout(t *testing.T) {
-	// TODO
-	// Does it make sense to reattempt timed-out requests, when all
-	// requests will have the same timeout? Do requests need
-	// functional options of their own?
-}
-
 func TestHeartbeat(t *testing.T) {
 	t.Run("returns a channel that receives a signal on each new request cycle", func(t *testing.T) {
 		const timeout = 1

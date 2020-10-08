@@ -101,10 +101,12 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 }
 
 type request struct {
-	done         <-chan struct{}
-	name         string
-	resultStream chan<- *result
-	noCache      bool // TODO: test
+	name         string          // the name of the template to fetch
+	cancel       <-chan struct{} // provided by the user via the WithCancel RequestOption
+	timeout      time.Duration   // provided by the user via WithTimeout or WithGlobalTimeout
+	done         <-chan struct{} // closed by Get when the request should be canceled or times out
+	resultStream chan<- *result  // used by Get to receive results from the cache
+	noCache      bool            // disable caching for the request // TODO: test
 }
 
 type result struct {
@@ -168,27 +170,41 @@ func (d *Doppel) startCache() {
 
 // Get returns a named template from the cache. Get is thread-safe.
 // TODO: Make Get take a context for timeout and cancellation.
-func (d *Doppel) Get(name string) (*template.Template, error) {
+func (d *Doppel) Get(name string, opts ...RequestOption) (*template.Template, error) {
 	select {
 	case <-d.inShutdown:
 		return nil, ErrDoppelClosed
 	default:
 	}
 
-	var timeout <-chan time.Time
-	if d.globalTimeout > 0 {
-		timeout = time.After(d.globalTimeout)
-	}
-
 	done := make(chan struct{})
 	// Buffer resultStream for cases where timeout expires concurrently with results being sent
 	resultStream := make(chan *result, 1)
-	req := &request{done, name, resultStream, false} // TODO: Should not store context as struct field, use done channel
+	req := &request{
+		done:         done,
+		name:         name,
+		resultStream: resultStream,
+		noCache:      false,
+	}
+
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	// TODO: Consider handling this with a context that is passed in, not
+	// part of the request object.x
+	if d.globalTimeout > 0 && d.globalTimeout < req.timeout {
+		req.timeout = d.globalTimeout
+	}
+	timeout := time.After(req.timeout)
 
 	select {
 	case <-timeout:
 		close(done)
 		return nil, ErrRequestTimeout
+	case <-req.cancel:
+		close(done)
+		return nil, ErrRequestCanceled
 	case d.requestStream <- req:
 	}
 
@@ -196,6 +212,9 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	case <-timeout:
 		close(done)
 		return nil, ErrRequestTimeout
+	case <-req.cancel:
+		close(done)
+		return nil, ErrRequestCanceled
 	case res := <-resultStream:
 		if res.err != nil {
 			return nil, res.err
@@ -204,7 +223,8 @@ func (d *Doppel) Get(name string) (*template.Template, error) {
 	}
 }
 
-var ErrRequestTimeout = errors.New("request timed out") // TODO: Improve
+var ErrRequestTimeout = errors.New("request timed out")                // TODO: Improve
+var ErrRequestCanceled = errors.New("request cancelled by the caller") // TODO: Improve
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
 // guaranteed to be non-nil.

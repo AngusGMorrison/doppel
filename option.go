@@ -4,7 +4,7 @@ import "time"
 
 // CacheOption are used to decorate new Doppels, e.g. adding template
 // expiry or memory limits.
-type CacheOption func(*Doppel) // TODO: Ensure custom Options can't affect unexported fields.
+type CacheOption func(*Doppel)
 
 // WithGlobalTimeout returns a CacheOption that sets a maximum
 // runtime for all requests made to the Doppel.
@@ -30,3 +30,17 @@ func WithLogger(log logger) CacheOption {
 // func WithMemoryLimit(limitInMB uint64) Option {
 
 // }
+
+type RequestOption func(*request)
+
+func WithTimeout(timeout time.Duration) RequestOption {
+	return func(r *request) {
+		r.timeout = timeout
+	}
+}
+
+func WithCancel(cancel <-chan struct{}) RequestOption {
+	return func(r *request) {
+		r.cancel = cancel
+	}
+}
