@@ -11,6 +11,7 @@ type cacheEntry struct {
 	err   error
 }
 
+// TODO: Update
 func (ce *cacheEntry) shouldRetry(req *request) bool {
 	return ce.err == context.DeadlineExceeded ||
 		ce.err == context.Canceled ||
@@ -34,7 +35,15 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
 		d.log.Printf("fetching base template %q for %q", s.BaseTmplName, req.name)
-		base, err := d.Get(s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
+		// Synchronize recursive requests with the original Get's timeout or
+		//cancellation.
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			<-req.done // guaranteed to be closed when the parent Get returns
+			// TODO: Test this guarantee.
+			cancel()
+		}()
+		base, err := d.Get(ctx, s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
 		if err != nil {
 			ce.err = err
 			return

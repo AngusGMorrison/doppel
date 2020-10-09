@@ -3,6 +3,7 @@
 package doppel
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"time"
@@ -102,8 +103,6 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 
 type request struct {
 	name         string          // the name of the template to fetch
-	cancel       <-chan struct{} // provided by the user via the WithCancel RequestOption
-	timeout      time.Duration   // provided by the user via WithTimeout or WithGlobalTimeout
 	done         <-chan struct{} // closed by Get when the request should be canceled or times out
 	resultStream chan<- *result  // used by Get to receive results from the cache
 	noCache      bool            // disable caching for the request // TODO: test
@@ -168,16 +167,24 @@ func (d *Doppel) startCache() {
 	}()
 }
 
-// Get returns a named template from the cache. Get is thread-safe.
-// TODO: Make Get take a context for timeout and cancellation.
-func (d *Doppel) Get(name string, opts ...RequestOption) (*template.Template, error) {
+// Get returns a named template from the cache. Get is thread-safe and
+// can be preempted via the supplied context.Context.
+func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, error) {
 	select {
 	case <-d.inShutdown:
 		return nil, ErrDoppelClosed
 	default:
 	}
 
+	// Contexts aren't suitable as struct fields, so we coordinate the action
+	// of recursive Get routines with a done channel that is closed if the
+	// top-level context expires or is cancelled.
+	//
+	// done should be closed at all exit points to ensure the signal cascades
+	// correctly.
 	done := make(chan struct{})
+	defer close(done)
+
 	// Buffer resultStream for cases where timeout expires concurrently with results being sent
 	resultStream := make(chan *result, 1)
 	req := &request{
@@ -187,38 +194,23 @@ func (d *Doppel) Get(name string, opts ...RequestOption) (*template.Template, er
 		noCache:      false,
 	}
 
-	for _, opt := range opts {
-		opt(req)
-	}
-
-	// TODO: Consider handling this with a context that is passed in, not
-	// part of the request object.x
-	if d.globalTimeout > 0 && d.globalTimeout < req.timeout {
-		req.timeout = d.globalTimeout
-	}
-
-	var timeout <-chan time.Time
-	if req.timeout > 0 {
-		timeout = time.After(req.timeout)
+	if d.globalTimeout > 0 {
+		var cancel context.CancelFunc
+		// WithTimeout retains the the parent context's timeout if the child's
+		// would occur later.
+		ctx, cancel = context.WithTimeout(ctx, d.globalTimeout)
+		defer cancel()
 	}
 
 	select {
-	case <-timeout:
-		close(done)
-		return nil, ErrRequestTimeout
-	case <-req.cancel:
-		close(done)
-		return nil, ErrRequestCanceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case d.requestStream <- req:
 	}
 
 	select {
-	case <-timeout:
-		close(done)
-		return nil, ErrRequestTimeout
-	case <-req.cancel:
-		close(done)
-		return nil, ErrRequestCanceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case res := <-resultStream:
 		if res.err != nil {
 			return nil, res.err

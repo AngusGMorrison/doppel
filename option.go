@@ -30,17 +30,3 @@ func WithLogger(log logger) CacheOption {
 // func WithMemoryLimit(limitInMB uint64) Option {
 
 // }
-
-type RequestOption func(*request)
-
-func WithTimeout(timeout time.Duration) RequestOption {
-	return func(r *request) {
-		r.timeout = timeout
-	}
-}
-
-func WithCancel(cancel <-chan struct{}) RequestOption {
-	return func(r *request) {
-		r.cancel = cancel
-	}
-}

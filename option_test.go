@@ -2,6 +2,7 @@ package doppel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -36,7 +37,7 @@ func TestWithLogger(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer d.Shutdown(gracePeriod)
-		d.Get("withBody1")
+		d.Get(context.Background(), "withBody1")
 
 		if gotLogs := l.String(); gotLogs == "" {
 			t.Error("failed to log operation, got empty string")

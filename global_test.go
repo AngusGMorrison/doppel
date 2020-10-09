@@ -1,6 +1,7 @@
 package doppel
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
@@ -39,7 +40,7 @@ func TestGet(t *testing.T) {
 		}
 		defer Close()
 
-		gotTemplate, err := Get(target)
+		gotTemplate, err := Get(context.Background(), target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -55,7 +56,7 @@ func TestGet(t *testing.T) {
 
 	t.Run("returns an error if called before Initialize", func(t *testing.T) {
 		globalCache = nil
-		_, err := Get("base")
+		_, err := Get(context.Background(), "base")
 		if err != ErrNotInitialized {
 			t.Errorf("got err %q, want ErrNotInitialized", err)
 		}

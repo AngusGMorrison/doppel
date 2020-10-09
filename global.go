@@ -1,6 +1,7 @@
 package doppel
 
 import (
+	"context"
 	"html/template"
 	"time"
 
@@ -38,12 +39,12 @@ var ErrAlreadyInitialized = errors.New("the global cache is already running")
 // or an error if it does not.
 //
 // If Get is called before Initialize, ErrNotInitialized is returned.
-func Get(name string) (*template.Template, error) {
+func Get(ctx context.Context, name string) (*template.Template, error) {
 	if globalCache == nil {
 		return nil, ErrNotInitialized // TODO: wrap error at boundary
 	}
 
-	return globalCache.Get(name)
+	return globalCache.Get(ctx, name)
 }
 
 // ErrNotInitialized is returned when a Get request is made to the

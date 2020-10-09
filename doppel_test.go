@@ -2,6 +2,7 @@ package doppel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"math/rand"
@@ -93,7 +94,7 @@ func TestNew(t *testing.T) {
 			}
 			defer d.Close()
 
-			d.Get("anything")
+			d.Get(context.Background(), "anything")
 			select {
 			case <-d.heartbeat:
 			case <-time.After(1 * time.Second):
@@ -140,7 +141,7 @@ func TestDoppelGet(t *testing.T) {
 			}
 			defer d.Shutdown(gracePeriod)
 
-			tmpl, err := d.Get(tc.schematicName)
+			tmpl, err := d.Get(context.Background(), tc.schematicName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -184,7 +185,7 @@ func TestDoppelGet(t *testing.T) {
 		defer d.Shutdown(gracePeriod)
 
 		for _, name := range []string{"incomplete", "missing"} {
-			tmpl, err := d.Get(name)
+			tmpl, err := d.Get(context.Background(), name)
 			if tmpl != nil {
 				t.Errorf("want d.Get(%q) to return nil template, got %+v", name, tmpl)
 			}
@@ -253,6 +254,10 @@ func TestDoppelGet(t *testing.T) {
 		// 		)
 		// 	}
 		// }
+	})
+
+	t.Run("return context.RequestCancelled if the request is cancelled", func(t *testing.T) {
+
 	})
 
 	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
@@ -337,7 +342,7 @@ func TestHeartbeat(t *testing.T) {
 		}
 
 		for i := 0; i < wantHeartbeats; i++ {
-			d.Get("base")
+			d.Get(context.Background(), "base")
 			heartbeatOrTimeout()
 		}
 
@@ -372,7 +377,7 @@ func TestShutdown(t *testing.T) {
 		t.Errorf("heartbeat failed to close")
 	}
 
-	tmpl, err := d.Get("base")
+	tmpl, err := d.Get(context.Background(), "base")
 	if tmpl != nil {
 		t.Error("Doppel accepted and completed new request after shutdown")
 	}
@@ -395,7 +400,7 @@ func TestClose(t *testing.T) {
 		t.Errorf("heartbeat failed to close")
 	}
 
-	if _, err := d.Get("base"); err != ErrDoppelClosed {
+	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelClosed {
 		t.Errorf("got %v, want ErrDoppelClosed", err)
 	}
 }
@@ -426,7 +431,7 @@ func Test_StressTest(t *testing.T) {
 		target := keys[rng.Intn(len(keys))]
 		wg.Add(1)
 		go func() {
-			_, err := d.Get(target)
+			_, err := d.Get(context.Background(), target)
 			resultStream <- &testResult{target, err}
 			wg.Done()
 		}()
