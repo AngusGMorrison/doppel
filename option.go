@@ -23,7 +23,7 @@ func WithLogger(log logger) CacheOption {
 
 const (
 	logRequestReceived       = "received request for template %q"
-	logRequestCanceled       = "request for template %q canceled"
+	logRequestInterrupted    = "request for template %q interrupted"
 	logParsingTemplate       = "parsing template %q"
 	logMissingSchematic      = "missing schematic for template %q"
 	logGettingBaseTemplate   = "getting base template %q for %q"
@@ -34,11 +34,11 @@ const (
 	logDeliveringTemplate    = "delivering template %q"
 )
 
-// WithRetryInterrupted causes cache entries in an error state as a result of
+// WithRetryTimeouts causes cache entries in an error state as a result of
 // timeout or cancellation to be retried.
-func WithRetryInterrupted() CacheOption {
+func WithRetryTimeouts() CacheOption {
 	return func(d *Doppel) {
-		d.retryInterrupted = true // TODO: implement
+		d.retryTimeouts = true // TODO: implement
 	}
 }
 

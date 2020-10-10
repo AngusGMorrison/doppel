@@ -20,14 +20,14 @@ import (
 // program ends, a timeout expires, or a memory threshold has been
 // reached, per user configuration via functional options.
 type Doppel struct {
-	globalTimeout    time.Duration
-	schematic        CacheSchematic
-	heartbeat        chan struct{} // signals the start of each work loop
-	requestStream    chan *request // sends requests to the work loop
-	inShutdown       chan struct{} // signals that graceful shutdown has been triggered
-	done             chan struct{} // signals that the work loop has returned
-	log              logger
-	retryInterrupted bool // flags whether to retry parsing templates that have previously timed out
+	globalTimeout time.Duration
+	schematic     CacheSchematic
+	heartbeat     chan struct{} // signals the start of each work loop
+	requestStream chan *request // sends requests to the work loop
+	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
+	done          chan struct{} // signals that the work loop has returned
+	log           logger
+	retryTimeouts bool // flags whether to retry parsing templates that have previously timed out
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -147,7 +147,7 @@ func (d *Doppel) startCache() {
 
 			select {
 			case <-req.ctx.Done():
-				d.log.Printf(logRequestCanceled, req.name)
+				d.log.Printf(logRequestInterrupted, req.name)
 				continue
 			default:
 			}
