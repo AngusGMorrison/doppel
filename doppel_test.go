@@ -111,9 +111,9 @@ func TestNew(t *testing.T) {
 			defer d.Shutdown(gracePeriod)
 
 			req := &request{
-				done:         make(chan struct{}),
 				name:         "base",
 				resultStream: make(chan<- *result, 1),
+				ctx:          context.Background(),
 			}
 
 			select {
@@ -313,28 +313,28 @@ func TestDoppelGet(t *testing.T) {
 		}
 	})
 
-	// t.Run("caches errored results", func(t *testing.T) {
-	// 	target := "error"
-	// 	testSchematic := schematic.Clone()
-	// 	testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
-	// 	log := &testLogger{out: &bytes.Buffer{}}
-	// 	d, err := New(schematic, WithLogger(log))
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-	// 	defer d.Close()
+	t.Run("caches errored results", func(t *testing.T) {
+		target := "error"
+		testSchematic := schematic.Clone()
+		testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
+		log := &testLogger{out: &bytes.Buffer{}}
+		d, err := New(schematic, WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
 
-	// 	_, err = d.Get(context.Background(), target)
-	// 	if err == nil {
-	// 		t.Fatalf("d.Get(%q) failed to return an error", target)
-	// 	}
+		_, err = d.Get(context.Background(), target)
+		if err == nil {
+			t.Fatalf("d.Get(%q) failed to return an error", target)
+		}
 
-	// 	logged := log.String()
-	// 	wantEntry := fmt.Sprintf(logDeliveringCachedError, target)
-	// 	if !strings.Contains(logged, wantEntry) {
-	// 		t.Errorf("d.Get(%q): error was not cached", target)
-	// 	}
-	// })
+		logged := log.String()
+		wantEntry := fmt.Sprintf(logDeliveringCachedError, target)
+		if !strings.Contains(logged, wantEntry) {
+			t.Errorf("d.Get(%q): error was not cached", target)
+		}
+	})
 }
 
 func TestIsCyclic(t *testing.T) {

@@ -72,7 +72,7 @@ type logger interface {
 // the cache's work loop.
 type defaultLog struct{}
 
-func (d *defaultLog) Printf(fmt string, args ...interface{}) {
+func (d *defaultLog) Printf(format string, args ...interface{}) {
 	// No-op.
 }
 
@@ -103,10 +103,14 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 }
 
 type request struct {
-	name         string          // the name of the template to fetch
-	done         <-chan struct{} // closed by Get when the request should be canceled or times out
-	resultStream chan<- *result  // used by Get to receive results from the cache
-	refreshCache bool            // disable caching for the request // TODO: test
+	name         string         // the name of the template to fetch
+	resultStream chan<- *result // used by Get to receive results from the cache
+	refreshCache bool           // disable caching for the request // TODO: test
+
+	// While generally inadvisable to store contexts in structs, ctx functions
+	// solely as a messenger, informing downstream Get requests when the
+	// original request has timed out or been canceled.
+	ctx context.Context
 }
 
 type result struct {
@@ -142,7 +146,7 @@ func (d *Doppel) startCache() {
 			}
 
 			select {
-			case <-req.done:
+			case <-req.ctx.Done():
 				d.log.Printf(logRequestCanceled, req.name)
 				continue
 			default:
@@ -170,19 +174,10 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 	default:
 	}
 
-	// Contexts aren't suitable as struct fields, so we coordinate the action
-	// of recursive Get routines with a done channel that is closed if the
-	// top-level context expires or is cancelled.
-	//
-	// done should be closed at all exit points to ensure the signal cascades
-	// correctly.
-	done := make(chan struct{})
-	defer close(done)
-
-	// Buffer resultStream for cases where timeout expires concurrently with results being sent
+	// Buffer resultStream for cases where timeout expires concurrently with results being sent.
 	resultStream := make(chan *result, 1)
 	req := &request{
-		done:         done,
+		// done:         done,
 		name:         name,
 		resultStream: resultStream,
 		refreshCache: false,
@@ -190,11 +185,17 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 
 	if d.globalTimeout > 0 {
 		var cancel context.CancelFunc
-		// WithTimeout retains the the parent context's timeout if the child's
-		// would occur later.
+		// WithTimeout retains the the parent context's timeout if
+		// d.globalTimeout occurs later.
 		ctx, cancel = context.WithTimeout(ctx, d.globalTimeout)
 		defer cancel()
 	}
+
+	// Wrap ctx to enforce cancellation of recursive Get requests if the
+	// original request returns early (e.g. due to timeout).
+	ctx, cancel := context.WithCancel(ctx)
+	req.ctx = ctx
+	defer cancel()
 
 	select {
 	case <-ctx.Done():
@@ -215,8 +216,8 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 
 var errRequestInterrupted = errors.New("request timed out or was cancelled before completion") // TODO: Improve
 
-// Heartbeat returns the Doppel's heartbeat channel, which is
-// guaranteed to be non-nil.
+// Heartbeat returns the Doppel's heartbeat channel, which is guaranteed to be
+// non-nil.
 func (d *Doppel) Heartbeat() <-chan struct{} {
 	return d.heartbeat
 }

@@ -28,9 +28,9 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 	defer close(ce.ready)
 
 	select {
-	case <-req.done:
-		d.log.Printf(logRequestCanceled, req.name)
-		ce.err = errRequestInterrupted
+	case <-req.ctx.Done():
+		d.log.Printf(logRequestCanceled, req.name) // TODO: Make logs suitable to ctx err
+		ce.err = req.ctx.Err()
 		return
 	default:
 	}
@@ -47,15 +47,18 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 	if s.BaseTmplName == "" {
 		tmpl, err = template.ParseFiles(s.Filepaths...)
 	} else {
-		d.log.Printf(logGettingBaseTemplate, s.BaseTmplName, req.name)
 		// Synchronize recursive requests with the original Get's timeout or
-		// cancellation.
+		// cancellation. req's context can't simply be wrapped by the new one
+		// because it is a struct field that hasn't flowed down the call stack
+		// in the usual fashion.
+		d.log.Printf(logGettingBaseTemplate, s.BaseTmplName, req.name)
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
-			<-req.done // guaranteed to be closed when the parent Get returns
+			<-req.ctx.Done() // guaranteed to be closed when the parent Get returns
 			// TODO: Test this guarantee.
 			cancel()
 		}()
+
 		base, err := d.Get(ctx, s.BaseTmplName)
 		if err != nil {
 			ce.err = err
@@ -75,7 +78,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 
 func (d *Doppel) deliver(ce *cacheEntry, req *request) {
 	select {
-	case <-req.done:
+	case <-req.ctx.Done():
 		d.log.Printf(logRequestCanceled, req.name)
 		return
 	case <-ce.ready:
