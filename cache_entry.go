@@ -15,7 +15,7 @@ type cacheEntry struct {
 func (ce *cacheEntry) shouldRetry(req *request) bool {
 	return ce.err == context.DeadlineExceeded ||
 		ce.err == context.Canceled ||
-		req.noCache
+		req.refreshCache
 }
 
 func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {

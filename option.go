@@ -21,6 +21,24 @@ func WithLogger(log logger) CacheOption {
 	}
 }
 
+// WithTimeoutRetry causes cache entries that have entered an error state as
+// a result of request timeout to be retried.
+func WithTimeoutRetry() CacheOption {
+	return func(d *Doppel) {
+		d.timeoutRetry = true // TODO: implement
+	}
+}
+
+// RequestOption allows configuration of individual Get requests.
+type RequestOption func(*request)
+
+// WithCacheRefresh forces the cached result to be reparsed.
+func WithCacheRefresh() RequestOption {
+	return func(r *request) {
+		r.refreshCache = true // TODO: implement
+	}
+}
+
 // TODO: Implement stale template expiry.
 // func WithExpiry(expireAfter time.Duration) Option {
 

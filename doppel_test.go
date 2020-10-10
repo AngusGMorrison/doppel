@@ -218,7 +218,7 @@ func TestDoppelGet(t *testing.T) {
 		var wg sync.WaitGroup
 		count := 50
 		wg.Add(count)
-		fmt.Println("running pseudorandom tests for preemption by timeout...")
+		fmt.Println("running pseudorandom timeout preemption tests...")
 		for i := 0; i < count; i++ {
 			timeout := time.Duration(rng.Intn(1e4)) * time.Nanosecond
 
@@ -240,12 +240,12 @@ func TestDoppelGet(t *testing.T) {
 		}()
 
 		for res := range resultStream {
-			fmt.Printf("calling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
+			fmt.Printf("\tcalling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
 			switch res.err {
 			case nil:
-				fmt.Println("✔ returned template before timeout")
+				fmt.Println("\t✔ returned template before timeout")
 			case context.DeadlineExceeded:
-				fmt.Println("✔ timed out with context.DeadlineExceeded")
+				fmt.Println("\t✔ timed out with context.DeadlineExceeded")
 			default:
 				t.Fatalf(
 					"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
@@ -255,12 +255,33 @@ func TestDoppelGet(t *testing.T) {
 		}
 	})
 
-	t.Run("return context.RequestCancelled if the request is cancelled", func(t *testing.T) {
+	t.Run("returns context.Canceled if the request is canceled", func(t *testing.T) {
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
 
-	})
+		errStream := make(chan error)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		target := "base"
+		go func() {
+			_, err := d.Get(ctx, target)
+			errStream <- err
+		}()
 
-	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
-		// TODO: Requires request timeout
+		select {
+		case <-d.Heartbeat(): // cancel after work has started
+			cancel()
+		case <-errStream:
+			t.Fatalf("request completed before cancellation")
+		}
+
+		err = <-errStream
+		if err != context.Canceled {
+			t.Errorf("want error context.Canceled, got: %v", err)
+		}
 	})
 
 	// t.Run("caches errored results", func(t *testing.T) {

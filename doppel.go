@@ -27,6 +27,7 @@ type Doppel struct {
 	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
 	done          chan struct{} // signals that the work loop has returned
 	log           logger
+	timeoutRetry  bool // flags whether to retry parsing templates that have previously timed out
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -105,7 +106,7 @@ type request struct {
 	name         string          // the name of the template to fetch
 	done         <-chan struct{} // closed by Get when the request should be canceled or times out
 	resultStream chan<- *result  // used by Get to receive results from the cache
-	noCache      bool            // disable caching for the request // TODO: test
+	refreshCache bool            // disable caching for the request // TODO: test
 }
 
 type result struct {
@@ -191,7 +192,7 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		done:         done,
 		name:         name,
 		resultStream: resultStream,
-		noCache:      false,
+		refreshCache: false,
 	}
 
 	if d.globalTimeout > 0 {

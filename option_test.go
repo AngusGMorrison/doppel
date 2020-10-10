@@ -58,3 +58,9 @@ func TestWithTimeout(t *testing.T) {
 	// requests will have the same timeout? Do requests need
 	// functional options of their own?
 }
+
+func TestWithTimeoutRetry(t *testing.T) {
+	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
+		// TODO: Requires request timeout
+	})
+}
