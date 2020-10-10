@@ -2,6 +2,7 @@ package doppel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -36,7 +37,7 @@ func TestWithLogger(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer d.Shutdown(gracePeriod)
-		d.Get("withBody1")
+		d.Get(context.Background(), "withBody1")
 
 		if gotLogs := l.String(); gotLogs == "" {
 			t.Error("failed to log operation, got empty string")
@@ -56,4 +57,10 @@ func TestWithTimeout(t *testing.T) {
 	// Does it make sense to reattempt timed-out requests, when all
 	// requests will have the same timeout? Do requests need
 	// functional options of their own?
+}
+
+func TestWithTimeoutRetry(t *testing.T) {
+	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
+		// TODO: Requires request timeout
+	})
 }

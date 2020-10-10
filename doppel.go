@@ -3,6 +3,7 @@
 package doppel
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"time"
@@ -26,6 +27,7 @@ type Doppel struct {
 	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
 	done          chan struct{} // signals that the work loop has returned
 	log           logger
+	timeoutRetry  bool // flags whether to retry parsing templates that have previously timed out
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -102,11 +104,9 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 
 type request struct {
 	name         string          // the name of the template to fetch
-	cancel       <-chan struct{} // provided by the user via the WithCancel RequestOption
-	timeout      time.Duration   // provided by the user via WithTimeout or WithGlobalTimeout
 	done         <-chan struct{} // closed by Get when the request should be canceled or times out
 	resultStream chan<- *result  // used by Get to receive results from the cache
-	noCache      bool            // disable caching for the request // TODO: test
+	refreshCache bool            // disable caching for the request // TODO: test
 }
 
 type result struct {
@@ -134,7 +134,7 @@ func (d *Doppel) startCache() {
 
 		templates := make(map[string]*cacheEntry)
 		for req := range d.requestStream {
-			d.log.Printf("received request for template %q", req.name)
+			d.log.Printf(logRequestReceived, req.name)
 			select {
 			case d.heartbeat <- struct{}{}:
 				// Signals that cache is at the top of its work loop.
@@ -143,24 +143,17 @@ func (d *Doppel) startCache() {
 
 			select {
 			case <-req.done:
-				d.log.Printf("request for template %q cancelled", req.name)
+				d.log.Printf(logRequestCanceled, req.name)
 				continue
 			default:
 			}
 
 			entry := templates[req.name]
 			if entry == nil || entry.shouldRetry(req) {
-				d.log.Printf("parsing template %q", req.name)
-				tmplSchematic := d.schematic[req.name]
-				if tmplSchematic == nil {
-					msg := fmt.Sprintf("missing schematic for template %q", req.name)
-					d.log.Printf(msg)
-					req.resultStream <- &result{err: errors.New(msg)}
-					continue
-				}
-
+				d.log.Printf(logParsingTemplate, req.name)
 				entry = &cacheEntry{ready: make(chan struct{})}
 				templates[req.name] = entry
+				tmplSchematic := d.schematic[req.name]
 				go d.parse(entry, req, tmplSchematic)
 			}
 			go d.deliver(entry, req)
@@ -168,57 +161,50 @@ func (d *Doppel) startCache() {
 	}()
 }
 
-// Get returns a named template from the cache. Get is thread-safe.
-// TODO: Make Get take a context for timeout and cancellation.
-func (d *Doppel) Get(name string, opts ...RequestOption) (*template.Template, error) {
+// Get returns a named template from the cache. Get is thread-safe and
+// can be preempted via the supplied context.Context.
+func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, error) {
 	select {
 	case <-d.inShutdown:
 		return nil, ErrDoppelClosed
 	default:
 	}
 
+	// Contexts aren't suitable as struct fields, so we coordinate the action
+	// of recursive Get routines with a done channel that is closed if the
+	// top-level context expires or is cancelled.
+	//
+	// done should be closed at all exit points to ensure the signal cascades
+	// correctly.
 	done := make(chan struct{})
+	defer close(done)
+
 	// Buffer resultStream for cases where timeout expires concurrently with results being sent
 	resultStream := make(chan *result, 1)
 	req := &request{
 		done:         done,
 		name:         name,
 		resultStream: resultStream,
-		noCache:      false,
+		refreshCache: false,
 	}
 
-	for _, opt := range opts {
-		opt(req)
-	}
-
-	// TODO: Consider handling this with a context that is passed in, not
-	// part of the request object.x
-	if d.globalTimeout > 0 && d.globalTimeout < req.timeout {
-		req.timeout = d.globalTimeout
-	}
-
-	var timeout <-chan time.Time
-	if req.timeout > 0 {
-		timeout = time.After(req.timeout)
+	if d.globalTimeout > 0 {
+		var cancel context.CancelFunc
+		// WithTimeout retains the the parent context's timeout if the child's
+		// would occur later.
+		ctx, cancel = context.WithTimeout(ctx, d.globalTimeout)
+		defer cancel()
 	}
 
 	select {
-	case <-timeout:
-		close(done)
-		return nil, ErrRequestTimeout
-	case <-req.cancel:
-		close(done)
-		return nil, ErrRequestCanceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case d.requestStream <- req:
 	}
 
 	select {
-	case <-timeout:
-		close(done)
-		return nil, ErrRequestTimeout
-	case <-req.cancel:
-		close(done)
-		return nil, ErrRequestCanceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case res := <-resultStream:
 		if res.err != nil {
 			return nil, res.err
@@ -227,8 +213,7 @@ func (d *Doppel) Get(name string, opts ...RequestOption) (*template.Template, er
 	}
 }
 
-var ErrRequestTimeout = errors.New("request timed out")                // TODO: Improve
-var ErrRequestCanceled = errors.New("request cancelled by the caller") // TODO: Improve
+var errRequestTerminated = errors.New("request was terminated before completion") // TODO: Improve
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
 // guaranteed to be non-nil.

@@ -2,11 +2,13 @@ package doppel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,7 +95,7 @@ func TestNew(t *testing.T) {
 			}
 			defer d.Close()
 
-			d.Get("anything")
+			d.Get(context.Background(), "anything")
 			select {
 			case <-d.heartbeat:
 			case <-time.After(1 * time.Second):
@@ -140,7 +142,7 @@ func TestDoppelGet(t *testing.T) {
 			}
 			defer d.Shutdown(gracePeriod)
 
-			tmpl, err := d.Get(tc.schematicName)
+			tmpl, err := d.Get(context.Background(), tc.schematicName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +169,35 @@ func TestDoppelGet(t *testing.T) {
 	}
 
 	t.Run("caches parsed templates", func(t *testing.T) {
-		// TODO: Requires logger
+		log := &testLogger{out: &bytes.Buffer{}}
+		d, err := New(schematic, WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+
+		target := "withBody1"
+		_, err = d.Get(context.Background(), target) // prime cache
+		if err != nil {
+			t.Fatal(err)
+		}
+		log.mu.Lock()
+		log.out = &bytes.Buffer{}
+		log.mu.Unlock()
+
+		_, err = d.Get(context.Background(), target) // get cached template
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		logged := log.String()
+		if logged == "" {
+			t.Fatalf("failed to record cache logs")
+		}
+		msg := fmt.Sprintf(logParsingTemplate, target)
+		if strings.Contains(logged, msg) {
+			t.Errorf("template was parsed, not cached")
+		}
 	})
 
 	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {
@@ -184,7 +214,7 @@ func TestDoppelGet(t *testing.T) {
 		defer d.Shutdown(gracePeriod)
 
 		for _, name := range []string{"incomplete", "missing"} {
-			tmpl, err := d.Get(name)
+			tmpl, err := d.Get(context.Background(), name)
 			if tmpl != nil {
 				t.Errorf("want d.Get(%q) to return nil template, got %+v", name, tmpl)
 			}
@@ -195,85 +225,116 @@ func TestDoppelGet(t *testing.T) {
 	})
 
 	t.Run("returns context.DeadlineExceeded if the request times out", func(t *testing.T) {
-		// TODO: Come back to this test when timeout can be controlled on a
-		// per-request basis.
-
 		// Response time is non-deterministic, so excersise the full
 		// range of preemption points via random testing.
-		// type testResult struct {
-		// 	target  string
-		// 	timeout time.Duration
-		// 	err     error
-		// }
+		type testResult struct {
+			target  string
+			timeout time.Duration
+			err     error
+		}
 
-		// resultStream := make(chan *testResult)
-		// source := rand.NewSource(time.Now().UnixNano())
-		// rng := rand.New(source)
-		// target := "withBody1"
+		resultStream := make(chan *testResult)
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
 
-		// var wg sync.WaitGroup
-		// count := 50
-		// wg.Add(count)
-		// for i := 0; i < count; i++ {
-		// 	timeout := time.Duration(rng.Intn(1e4)) * time.Microsecond
+		target := "withBody1"
+		_, err = d.Get(context.Background(), target) // prime the cache
 
-		// 	go func(target string, timeout time.Duration) {
-		// 		result := &testResult{target: target, timeout: timeout}
+		var wg sync.WaitGroup
+		count := 50
+		wg.Add(count)
+		fmt.Println("running pseudorandom timeout preemption tests...")
+		for i := 0; i < count; i++ {
+			timeout := time.Duration(rng.Intn(1e4)) * time.Nanosecond
 
-		// 		d, err := New(schematic, WithGlobalTimeout(timeout), WithLogger(log.New(os.Stdout, "", 0)))
-		// 		if err != nil {
-		// 			result.err = err
-		// 			resultStream <- result
-		// 		}
-		// 		defer d.Shutdown(2 * gracePeriod)
+			go func(target string, timeout time.Duration) {
+				result := &testResult{target: target, timeout: timeout}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
 
-		// 		_, err = d.Get(target)
-		// 		result.err = err
-		// 		resultStream <- result
-		// 		wg.Done()
-		// 	}(target, timeout)
-		// }
+				_, err := d.Get(ctx, target)
+				result.err = err
+				resultStream <- result
+				wg.Done()
+			}(target, timeout)
+		}
 
-		// go func() {
-		// 	wg.Wait()
-		// 	close(resultStream)
-		// }()
+		go func() {
+			wg.Wait()
+			close(resultStream)
+		}()
 
-		// for res := range resultStream {
-		// 	fmt.Printf("calling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
-		// 	switch res.err {
-		// 	case nil:
-		// 		fmt.Println("✔ returned template before timeout")
-		// 	case ErrRequestTimeout:
-		// 		fmt.Println("✔ timed out with ErrRequestTimeout")
-		// 	default:
-		// 		t.Fatalf(
-		// 			"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
-		// 			res.target, res.timeout/1e3, res.err,
-		// 		)
-		// 	}
-		// }
+		for res := range resultStream {
+			fmt.Printf("\tcalling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
+			switch res.err {
+			case nil:
+				fmt.Println("\t✔ returned template before timeout")
+			case context.DeadlineExceeded:
+				fmt.Println("\t✔ timed out with context.DeadlineExceeded")
+			default:
+				t.Fatalf(
+					"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
+					res.target, res.timeout/1e3, res.err,
+				)
+			}
+		}
 	})
 
-	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
-		// TODO: Requires request timeout
+	t.Run("returns context.Canceled if the request is canceled", func(t *testing.T) {
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+
+		errStream := make(chan error)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		target := "base"
+		go func() {
+			_, err := d.Get(ctx, target)
+			errStream <- err
+		}()
+
+		select {
+		case <-d.Heartbeat(): // cancel after work has started
+			cancel()
+		case <-errStream:
+			t.Fatalf("request completed before cancellation")
+		}
+
+		err = <-errStream
+		if err != context.Canceled {
+			t.Errorf("want error context.Canceled, got: %v", err)
+		}
 	})
 
-	// t.Run("caches errored results", func(t *testing.T) {
-	// testSchematic := schematic.Clone()
-	// testSchematic["error"] = &TemplateSchematic{"", []string{"missing"}},
-	// 	d, err := New(schematic)
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-	// 	defer d.Shutdown(gracePeriod)
+	t.Run("caches errored results", func(t *testing.T) {
+		target := "error"
+		testSchematic := schematic.Clone()
+		testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
+		log := &testLogger{out: &bytes.Buffer{}}
+		d, err := New(schematic, WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
 
-	// 	_, err = d.Get("error")
-	// 	if err != nil {
-	// 		t.Error("d.Get(\"error\") failed to return an error")
-	// 	}
-	// 	// TODO: Solve with logger
-	// })
+		_, err = d.Get(context.Background(), target)
+		if err == nil {
+			t.Fatalf("d.Get(%q) failed to return an error", target)
+		}
+
+		logged := log.String()
+		wantEntry := fmt.Sprintf(logDeliveringCachedError, target)
+		if !strings.Contains(logged, wantEntry) {
+			t.Errorf("d.Get(%q): error was not cached", target)
+		}
+	})
 }
 
 func TestIsCyclic(t *testing.T) {
@@ -337,7 +398,7 @@ func TestHeartbeat(t *testing.T) {
 		}
 
 		for i := 0; i < wantHeartbeats; i++ {
-			d.Get("base")
+			d.Get(context.Background(), "base")
 			heartbeatOrTimeout()
 		}
 
@@ -372,7 +433,7 @@ func TestShutdown(t *testing.T) {
 		t.Errorf("heartbeat failed to close")
 	}
 
-	tmpl, err := d.Get("base")
+	tmpl, err := d.Get(context.Background(), "base")
 	if tmpl != nil {
 		t.Error("Doppel accepted and completed new request after shutdown")
 	}
@@ -395,7 +456,7 @@ func TestClose(t *testing.T) {
 		t.Errorf("heartbeat failed to close")
 	}
 
-	if _, err := d.Get("base"); err != ErrDoppelClosed {
+	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelClosed {
 		t.Errorf("got %v, want ErrDoppelClosed", err)
 	}
 }
@@ -426,7 +487,7 @@ func Test_StressTest(t *testing.T) {
 		target := keys[rng.Intn(len(keys))]
 		wg.Add(1)
 		go func() {
-			_, err := d.Get(target)
+			_, err := d.Get(context.Background(), target)
 			resultStream <- &testResult{target, err}
 			wg.Done()
 		}()
