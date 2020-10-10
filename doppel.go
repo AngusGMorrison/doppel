@@ -20,14 +20,14 @@ import (
 // program ends, a timeout expires, or a memory threshold has been
 // reached, per user configuration via functional options.
 type Doppel struct {
-	globalTimeout time.Duration
-	schematic     CacheSchematic
-	heartbeat     chan struct{} // signals the start of each work loop
-	requestStream chan *request // sends requests to the work loop
-	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
-	done          chan struct{} // signals that the work loop has returned
-	log           logger
-	timeoutRetry  bool // flags whether to retry parsing templates that have previously timed out
+	globalTimeout    time.Duration
+	schematic        CacheSchematic
+	heartbeat        chan struct{} // signals the start of each work loop
+	requestStream    chan *request // sends requests to the work loop
+	inShutdown       chan struct{} // signals that graceful shutdown has been triggered
+	done             chan struct{} // signals that the work loop has returned
+	log              logger
+	retryInterrupted bool // flags whether to retry parsing templates that have previously timed out
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -149,7 +149,7 @@ func (d *Doppel) startCache() {
 			}
 
 			entry := templates[req.name]
-			if entry == nil || entry.shouldRetry(req) {
+			if entry == nil || d.shouldRetry(entry, req) {
 				d.log.Printf(logParsingTemplate, req.name)
 				entry = &cacheEntry{ready: make(chan struct{})}
 				templates[req.name] = entry
@@ -213,7 +213,7 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 	}
 }
 
-var errRequestTerminated = errors.New("request was terminated before completion") // TODO: Improve
+var errRequestInterrupted = errors.New("request timed out or was cancelled before completion") // TODO: Improve
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
 // guaranteed to be non-nil.

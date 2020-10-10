@@ -14,11 +14,14 @@ type cacheEntry struct {
 	err   error
 }
 
-// TODO: Update
-func (ce *cacheEntry) shouldRetry(req *request) bool {
-	return ce.err == context.DeadlineExceeded ||
-		ce.err == context.Canceled ||
-		req.refreshCache
+func (d *Doppel) shouldRetry(ce *cacheEntry, req *request) bool {
+	return req.refreshCache || d.retryInterrupted && isInterruptErr(ce.err)
+}
+
+func isInterruptErr(err error) bool {
+	return err == context.DeadlineExceeded ||
+		err == context.Canceled ||
+		err == errRequestInterrupted
 }
 
 func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
@@ -27,7 +30,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 	select {
 	case <-req.done:
 		d.log.Printf(logRequestCanceled, req.name)
-		ce.err = errRequestTerminated
+		ce.err = errRequestInterrupted
 		return
 	default:
 	}

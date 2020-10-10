@@ -42,7 +42,6 @@ func TestWithLogger(t *testing.T) {
 		if gotLogs := l.String(); gotLogs == "" {
 			t.Error("failed to log operation, got empty string")
 		}
-		fmt.Println(l.String())
 	})
 
 	// TODO: Test for specific logging events.

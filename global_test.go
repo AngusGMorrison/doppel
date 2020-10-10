@@ -2,7 +2,6 @@ package doppel
 
 import (
 	"context"
-	"fmt"
 	"testing"
 )
 
@@ -32,7 +31,7 @@ func TestInitialize(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	t.Run(fmt.Sprintf("returns the requested template"), func(t *testing.T) {
+	t.Run("returns the requested template", func(t *testing.T) {
 		target := "withBody1"
 		err := Initialize(schematic)
 		if err != nil {

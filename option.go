@@ -34,11 +34,11 @@ const (
 	logDeliveringTemplate    = "delivering template %q"
 )
 
-// WithTimeoutRetry causes cache entries that have entered an error state as
-// a result of request timeout to be retried.
-func WithTimeoutRetry() CacheOption {
+// WithRetryInterrupted causes cache entries in an error state as a result of
+// timeout or cancellation to be retried.
+func WithRetryInterrupted() CacheOption {
 	return func(d *Doppel) {
-		d.timeoutRetry = true // TODO: implement
+		d.retryInterrupted = true // TODO: implement
 	}
 }
 
