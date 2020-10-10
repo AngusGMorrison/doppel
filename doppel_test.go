@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -168,7 +169,35 @@ func TestDoppelGet(t *testing.T) {
 	}
 
 	t.Run("caches parsed templates", func(t *testing.T) {
-		// TODO: Requires logger
+		log := &testLogger{out: &bytes.Buffer{}}
+		d, err := New(schematic, WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+
+		target := "withBody1"
+		_, err = d.Get(context.Background(), target) // prime cache
+		if err != nil {
+			t.Fatal(err)
+		}
+		log.mu.Lock()
+		log.out = &bytes.Buffer{}
+		log.mu.Unlock()
+
+		_, err = d.Get(context.Background(), target) // get cached template
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		logged := log.String()
+		if logged == "" {
+			t.Fatalf("failed to record cache logs")
+		}
+		msg := fmt.Sprintf(logParsingTemplate, target)
+		if strings.Contains(logged, msg) {
+			t.Errorf("template was parsed, not cached")
+		}
 	})
 
 	t.Run("returns an error if any constituent TemplateSchematic is not found", func(t *testing.T) {

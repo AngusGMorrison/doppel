@@ -134,7 +134,7 @@ func (d *Doppel) startCache() {
 
 		templates := make(map[string]*cacheEntry)
 		for req := range d.requestStream {
-			d.log.Printf("received request for template %q", req.name)
+			d.log.Printf(logRequestReceived, req.name)
 			select {
 			case d.heartbeat <- struct{}{}:
 				// Signals that cache is at the top of its work loop.
@@ -143,17 +143,17 @@ func (d *Doppel) startCache() {
 
 			select {
 			case <-req.done:
-				d.log.Printf("request for template %q cancelled", req.name)
+				d.log.Printf(logRequestCanceled, req.name)
 				continue
 			default:
 			}
 
 			entry := templates[req.name]
 			if entry == nil || entry.shouldRetry(req) {
-				d.log.Printf("parsing template %q", req.name)
+				d.log.Printf(logParsingTemplate, req.name)
 				tmplSchematic := d.schematic[req.name]
 				if tmplSchematic == nil {
-					msg := fmt.Sprintf("missing schematic for template %q", req.name)
+					msg := fmt.Sprintf(logMissingSchematic, req.name)
 					d.log.Printf(msg)
 					req.resultStream <- &result{err: errors.New(msg)}
 					continue

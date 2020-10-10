@@ -21,6 +21,19 @@ func WithLogger(log logger) CacheOption {
 	}
 }
 
+const (
+	logRequestReceived     = "received request for template %q"
+	logRequestCanceled     = "request for template %q canceled"
+	logParsingTemplate     = "parsing template %q"
+	logMissingSchematic    = "missing schematic for template %q"
+	logGettingBaseTemplate = "getting base template %q for %q"
+	logParsingError        = "parsing error for template %q"
+	logParsingSuccess      = "template %q parsed successfully"
+	logFoundCachedError    = "found cached error for template %q"
+	logCloningError        = "error cloning template %q: %v"
+	logDeliveringTemplate  = "delivering template %q"
+)
+
 // WithTimeoutRetry causes cache entries that have entered an error state as
 // a result of request timeout to be retried.
 func WithTimeoutRetry() CacheOption {
