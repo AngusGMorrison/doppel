@@ -36,35 +36,26 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 	} else {
 		d.log.Printf("fetching base template %q for %q", s.BaseTmplName, req.name)
 		// Synchronize recursive requests with the original Get's timeout or
-		//cancellation.
+		// cancellation.
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			<-req.done // guaranteed to be closed when the parent Get returns
 			// TODO: Test this guarantee.
 			cancel()
 		}()
-		base, err := d.Get(ctx, s.BaseTmplName) // TODO: Secondary request is not beholden to the timeout of the first.
+		base, err := d.Get(ctx, s.BaseTmplName)
 		if err != nil {
 			ce.err = err
 			return
 		}
-
-		select {
-		case <-req.done:
-			d.log.Printf("request for template %q cancelled", req.name)
-			ce.err = ErrRequestTimeout
-			return
-		default:
-		}
-
 		tmpl, err = base.ParseFiles(s.Filepaths...)
 	}
+
 	if err != nil {
 		d.log.Printf("parsing error for template %q", req.name)
 		ce.err = err
 		return
 	}
-
 	d.log.Printf("template %q parsed successfully", req.name)
 	ce.tmpl = tmpl
 }

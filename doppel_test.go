@@ -196,64 +196,63 @@ func TestDoppelGet(t *testing.T) {
 	})
 
 	t.Run("returns context.DeadlineExceeded if the request times out", func(t *testing.T) {
-		// TODO: Come back to this test when timeout can be controlled on a
-		// per-request basis.
-
 		// Response time is non-deterministic, so excersise the full
 		// range of preemption points via random testing.
-		// type testResult struct {
-		// 	target  string
-		// 	timeout time.Duration
-		// 	err     error
-		// }
+		type testResult struct {
+			target  string
+			timeout time.Duration
+			err     error
+		}
 
-		// resultStream := make(chan *testResult)
-		// source := rand.NewSource(time.Now().UnixNano())
-		// rng := rand.New(source)
-		// target := "withBody1"
+		resultStream := make(chan *testResult)
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
 
-		// var wg sync.WaitGroup
-		// count := 50
-		// wg.Add(count)
-		// for i := 0; i < count; i++ {
-		// 	timeout := time.Duration(rng.Intn(1e4)) * time.Microsecond
+		target := "withBody1"
+		_, err = d.Get(context.Background(), target) // prime the cache
 
-		// 	go func(target string, timeout time.Duration) {
-		// 		result := &testResult{target: target, timeout: timeout}
+		var wg sync.WaitGroup
+		count := 50
+		wg.Add(count)
+		fmt.Println("running pseudorandom tests for preemption by timeout...")
+		for i := 0; i < count; i++ {
+			timeout := time.Duration(rng.Intn(1e4)) * time.Nanosecond
 
-		// 		d, err := New(schematic, WithGlobalTimeout(timeout), WithLogger(log.New(os.Stdout, "", 0)))
-		// 		if err != nil {
-		// 			result.err = err
-		// 			resultStream <- result
-		// 		}
-		// 		defer d.Shutdown(2 * gracePeriod)
+			go func(target string, timeout time.Duration) {
+				result := &testResult{target: target, timeout: timeout}
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
 
-		// 		_, err = d.Get(target)
-		// 		result.err = err
-		// 		resultStream <- result
-		// 		wg.Done()
-		// 	}(target, timeout)
-		// }
+				_, err := d.Get(ctx, target)
+				result.err = err
+				resultStream <- result
+				wg.Done()
+			}(target, timeout)
+		}
 
-		// go func() {
-		// 	wg.Wait()
-		// 	close(resultStream)
-		// }()
+		go func() {
+			wg.Wait()
+			close(resultStream)
+		}()
 
-		// for res := range resultStream {
-		// 	fmt.Printf("calling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
-		// 	switch res.err {
-		// 	case nil:
-		// 		fmt.Println("✔ returned template before timeout")
-		// 	case ErrRequestTimeout:
-		// 		fmt.Println("✔ timed out with ErrRequestTimeout")
-		// 	default:
-		// 		t.Fatalf(
-		// 			"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
-		// 			res.target, res.timeout/1e3, res.err,
-		// 		)
-		// 	}
-		// }
+		for res := range resultStream {
+			fmt.Printf("calling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
+			switch res.err {
+			case nil:
+				fmt.Println("✔ returned template before timeout")
+			case context.DeadlineExceeded:
+				fmt.Println("✔ timed out with context.DeadlineExceeded")
+			default:
+				t.Fatalf(
+					"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
+					res.target, res.timeout/1e3, res.err,
+				)
+			}
+		}
 	})
 
 	t.Run("return context.RequestCancelled if the request is cancelled", func(t *testing.T) {
