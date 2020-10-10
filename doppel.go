@@ -151,16 +151,9 @@ func (d *Doppel) startCache() {
 			entry := templates[req.name]
 			if entry == nil || entry.shouldRetry(req) {
 				d.log.Printf(logParsingTemplate, req.name)
-				tmplSchematic := d.schematic[req.name]
-				if tmplSchematic == nil {
-					msg := fmt.Sprintf(logMissingSchematic, req.name)
-					d.log.Printf(msg)
-					req.resultStream <- &result{err: errors.New(msg)}
-					continue
-				}
-
 				entry = &cacheEntry{ready: make(chan struct{})}
 				templates[req.name] = entry
+				tmplSchematic := d.schematic[req.name]
 				go d.parse(entry, req, tmplSchematic)
 			}
 			go d.deliver(entry, req)
@@ -220,8 +213,7 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 	}
 }
 
-var ErrRequestTimeout = errors.New("request timed out")                // TODO: Improve
-var ErrRequestCanceled = errors.New("request cancelled by the caller") // TODO: Improve
+var errRequestTerminated = errors.New("request was terminated before completion") // TODO: Improve
 
 // Heartbeat returns the Doppel's heartbeat channel, which is
 // guaranteed to be non-nil.

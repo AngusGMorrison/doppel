@@ -313,21 +313,28 @@ func TestDoppelGet(t *testing.T) {
 		}
 	})
 
-	// t.Run("caches errored results", func(t *testing.T) {
-	// testSchematic := schematic.Clone()
-	// testSchematic["error"] = &TemplateSchematic{"", []string{"missing"}},
-	// 	d, err := New(schematic)
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-	// 	defer d.Shutdown(gracePeriod)
+	t.Run("caches errored results", func(t *testing.T) {
+		target := "error"
+		testSchematic := schematic.Clone()
+		testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
+		log := &testLogger{out: &bytes.Buffer{}}
+		d, err := New(schematic, WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
 
-	// 	_, err = d.Get("error")
-	// 	if err != nil {
-	// 		t.Error("d.Get(\"error\") failed to return an error")
-	// 	}
-	// 	// TODO: Solve with logger
-	// })
+		_, err = d.Get(context.Background(), target)
+		if err == nil {
+			t.Fatalf("d.Get(%q) failed to return an error", target)
+		}
+
+		logged := log.String()
+		wantEntry := fmt.Sprintf(logDeliveringCachedError, target)
+		if !strings.Contains(logged, wantEntry) {
+			t.Errorf("d.Get(%q): error was not cached", target)
+		}
+	})
 }
 
 func TestIsCyclic(t *testing.T) {
