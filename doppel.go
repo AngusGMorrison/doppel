@@ -136,7 +136,7 @@ func (d *Doppel) startCache() {
 		defer close(d.heartbeat)
 		defer close(d.done)
 
-		templates := make(map[string]*cacheEntry)
+		cache := make(map[string]*cacheEntry)
 		for req := range d.requestStream {
 			d.log.Printf(logRequestReceived, req.name)
 			select {
@@ -152,11 +152,11 @@ func (d *Doppel) startCache() {
 			default:
 			}
 
-			entry := templates[req.name]
+			entry := cache[req.name]
 			if entry == nil || d.shouldRetry(entry, req) {
 				d.log.Printf(logParsingTemplate, req.name)
 				entry = &cacheEntry{ready: make(chan struct{})}
-				templates[req.name] = entry
+				cache[req.name] = entry
 				tmplSchematic := d.schematic[req.name]
 				go d.parse(entry, req, tmplSchematic)
 			}
@@ -229,9 +229,11 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 func (d *Doppel) Shutdown(gracePeriod time.Duration) {
 	close(d.inShutdown) // signals that Get should no longer accept new requests
 	d.log.Printf("shutting down gracefully...")
-	<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
-	close(d.requestStream)
-	d.log.Printf("shutdown complete")
+	go func() {
+		<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
+		close(d.requestStream)
+		d.log.Printf("shutdown complete")
+	}()
 }
 
 // Close forces the Doppel to shut down without accepting pending

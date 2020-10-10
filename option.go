@@ -38,7 +38,7 @@ const (
 // timeout or cancellation to be retried.
 func WithRetryTimeouts() CacheOption {
 	return func(d *Doppel) {
-		d.retryTimeouts = true // TODO: implement
+		d.retryTimeouts = true
 	}
 }
 
@@ -48,7 +48,7 @@ type RequestOption func(*request)
 // WithCacheRefresh forces the cached result to be reparsed.
 func WithCacheRefresh() RequestOption {
 	return func(r *request) {
-		r.refreshCache = true // TODO: implement
+		r.refreshCache = true
 	}
 }
 

@@ -15,6 +15,12 @@ type cacheEntry struct {
 }
 
 func (d *Doppel) shouldRetry(ce *cacheEntry, req *request) bool {
+	select {
+	case <-ce.ready:
+	case <-req.ctx.Done():
+		return false
+	}
+
 	return req.refreshCache ||
 		ce.err == context.Canceled ||
 		d.retryTimeouts && ce.err == context.DeadlineExceeded
@@ -25,7 +31,6 @@ func (d *Doppel) parse(ce *cacheEntry, req *request, s *TemplateSchematic) {
 
 	select {
 	case <-req.ctx.Done():
-		d.log.Printf(logRequestInterrupted, req.name) // TODO: Make logs suitable to ctx err
 		ce.err = req.ctx.Err()
 		return
 	default:

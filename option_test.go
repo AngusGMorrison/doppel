@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"math/rand"
+	"os"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Go's log package recycles its buffer for each log entry, causing a data
@@ -43,23 +47,228 @@ func TestWithLogger(t *testing.T) {
 			t.Error("failed to log operation, got empty string")
 		}
 	})
-
-	// TODO: Test for specific logging events.
 }
 
-func TestWithGlobalTimemout(t *testing.T) {
-	// TODO
-}
+func TestWithGlobalTimeout(t *testing.T) {
+	t.Run("Get returns context.DeadlineExceeded when timeout expires", func(t *testing.T) {
+		globalTimeout := 1 * time.Nanosecond
+		d, err := New(schematic, WithGlobalTimeout(globalTimeout))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
 
-func TestWithTimeout(t *testing.T) {
-	// TODO
-	// Does it make sense to reattempt timed-out requests, when all
-	// requests will have the same timeout? Do requests need
-	// functional options of their own?
-}
-
-func TestWithTimeoutRetry(t *testing.T) {
-	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
-		// TODO: Requires request timeout
+		_, err = d.Get(context.Background(), "base")
+		if err != context.DeadlineExceeded {
+			t.Errorf("want context.DeadlineExceeded, got: %v", err)
+		}
 	})
+
+	t.Run("Get times out after the shortest of global timeout and request timeout", func(t *testing.T) {
+		globalTimeout := 1 * time.Millisecond
+		d, err := New(schematic, WithGlobalTimeout(globalTimeout))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
+
+		reqTimeout := 1 * time.Nanosecond
+		errStream := make(chan error)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), reqTimeout)
+			defer cancel()
+			_, err := d.Get(ctx, "withBody1")
+			errStream <- err
+		}()
+
+		select {
+		case err := <-errStream:
+			if err != context.DeadlineExceeded {
+				t.Errorf("request timeout expired with error \"%v\"; want context.DeadlineExceeded",
+					err)
+			}
+		case <-time.After(globalTimeout):
+			t.Errorf("global timeout expired before Get returned; want request timeout to expire first")
+		}
+	})
+
+}
+
+func TestShouldRetry(t *testing.T) {
+	t.Run("returns the expected output for each input", func(t *testing.T) {
+		retryDoppel, err := New(schematic, WithRetryTimeouts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer retryDoppel.Shutdown(gracePeriod)
+
+		noRetryDoppel, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer noRetryDoppel.Shutdown(gracePeriod)
+
+		closed := make(chan struct{})
+		close(closed)
+		// Although non-exhaustive, these tests give reasonable assurance that
+		// shouldRetry as internally they are ORed together.
+		testCases := []struct {
+			d    *Doppel
+			ce   *cacheEntry
+			req  *request
+			want bool
+		}{
+			{
+				d:    noRetryDoppel,
+				ce:   &cacheEntry{closed, nil, nil},
+				req:  &request{refreshCache: false, ctx: context.Background()},
+				want: false,
+			},
+			{
+				d:    retryDoppel,
+				ce:   &cacheEntry{closed, nil, nil},
+				req:  &request{refreshCache: false, ctx: context.Background()},
+				want: false,
+			},
+			{
+				d:    retryDoppel,
+				ce:   &cacheEntry{closed, nil, context.DeadlineExceeded},
+				req:  &request{refreshCache: false, ctx: context.Background()},
+				want: true,
+			},
+			{
+				d:    noRetryDoppel,
+				ce:   &cacheEntry{closed, nil, context.Canceled},
+				req:  &request{refreshCache: false, ctx: context.Background()},
+				want: true,
+			},
+			{
+				d:    noRetryDoppel,
+				ce:   &cacheEntry{closed, nil, nil},
+				req:  &request{refreshCache: true, ctx: context.Background()},
+				want: true,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("retryTimeouts=%t, cachedErr=%q, refreshCache=%t",
+				tc.d.retryTimeouts, tc.ce.err, tc.req.refreshCache),
+				func(t *testing.T) {
+					if got := tc.d.shouldRetry(tc.ce, tc.req); got != tc.want {
+						t.Errorf("got %t, want %t", got, tc.want)
+					}
+				})
+		}
+	})
+
+	t.Run("blocks until cacheEntry is ready or request is interrupted", func(t *testing.T) {
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
+
+		t.Run("when cache entry becomes ready", func(t *testing.T) {
+			resultStream := make(chan bool)
+			ce := &cacheEntry{ready: make(chan struct{})}
+			req := &request{refreshCache: false, ctx: context.Background()}
+			go func() {
+				resultStream <- d.shouldRetry(ce, req)
+			}()
+
+			select {
+			case <-resultStream:
+				t.Error("got result before ready channel was closed")
+				close(ce.ready)
+			case <-time.After(500 * time.Millisecond):
+				close(ce.ready)
+				select {
+				case <-resultStream:
+				case <-time.After(500 * time.Millisecond):
+					t.Error("timed out before receiving result after closing ready chan")
+				}
+			}
+		})
+
+		t.Run("when request is interrupted", func(t *testing.T) {
+			ce := &cacheEntry{ready: make(chan struct{})}
+			ctx, cancel := context.WithTimeout(context.Background(), 0*time.Nanosecond)
+			defer cancel()
+			req := &request{ctx: ctx}
+			resultStream := make(chan bool)
+
+			go func() {
+				resultStream <- d.shouldRetry(ce, req)
+			}()
+
+			select {
+			case res := <-resultStream:
+				if res != false {
+					t.Errorf("got %t, want false", res)
+				}
+			case <-time.After(500 * time.Millisecond):
+				t.Fatalf("failed to unblock before timeout")
+				close(ce.ready)
+			}
+		})
+	})
+}
+
+func TestWithRetryTimeouts(t *testing.T) {
+	t.Run("cache reattempts timed-out requests when present", func(t *testing.T) {
+		d, err := New(schematic, WithRetryTimeouts())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		target := "withBody1"
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+		defer cancel()
+		_, err = d.Get(ctx, target)
+		if err != context.DeadlineExceeded {
+			t.Fatalf("initial get failed with error: %v", err)
+		}
+
+		_, err = d.Get(context.Background(), target)
+		if err != nil {
+			t.Errorf("want request to succeed, got error: %v", err)
+		}
+	})
+
+	t.Run("cache returns previous timeout error when absent", func(t *testing.T) {
+		logger := log.New(os.Stdout, "", 0)
+		d, err := New(schematic, WithLogger(logger))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
+
+		target := "withBody1"
+		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+		for {
+			fmt.Println("start loop")
+			timeout := time.Duration(rng.Intn(1e4)) * time.Nanosecond
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			_, err := d.Get(ctx, target)
+			cancel()
+			if err == nil {
+				continue
+			}
+			if err != context.DeadlineExceeded {
+				t.Fatalf("initial get failed with error: %v", err)
+			}
+
+			_, err = d.Get(context.Background(), target)
+			if err == nil {
+				continue
+			} else if err != context.DeadlineExceeded {
+				t.Errorf("Get failed to return cached timeout error; got error: %v", err)
+			}
+			break
+		}
+	})
+}
+
+func TestWithExpiry(t *testing.T) {
+	// TODO
 }
