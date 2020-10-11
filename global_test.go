@@ -30,7 +30,7 @@ func TestInitialize(t *testing.T) {
 	})
 }
 
-func TestGet(t *testing.T) {
+func TestGlobalGet(t *testing.T) {
 	t.Run("returns the requested template", func(t *testing.T) {
 		target := "withBody1"
 		err := Initialize(schematic)
@@ -62,7 +62,7 @@ func TestGet(t *testing.T) {
 	})
 }
 
-func TestShutdown(t *testing.T) {
+func TestGlobalShutdown(t *testing.T) {
 	err := Initialize(schematic)
 	if err != nil {
 		t.Fatal(err)

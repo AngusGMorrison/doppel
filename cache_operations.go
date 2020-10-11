@@ -103,12 +103,7 @@ loop:
 
 	// Return a copy of the template that can be safely executed
 	// without affecting cached templates.
-	clone, err := ce.tmpl.Clone()
-	if err != nil {
-		d.log.Printf(logCloningError, req.name, err)
-		req.resultStream <- &result{err: ce.err}
-		return
-	}
 	d.log.Printf(logDeliveringTemplate, req.name)
+	clone, _ := ce.tmpl.Clone()
 	req.resultStream <- &result{tmpl: clone}
 }

@@ -125,7 +125,7 @@ func TestNew(t *testing.T) {
 	})
 }
 
-func TestDoppelGet(t *testing.T) {
+func TestGet(t *testing.T) {
 	testCases := []struct {
 		schematicName string
 		files         []string
@@ -318,7 +318,7 @@ func TestDoppelGet(t *testing.T) {
 		testSchematic := schematic.Clone()
 		testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
 		log := &testLogger{out: &bytes.Buffer{}}
-		d, err := New(schematic, WithLogger(log))
+		d, err := New(testSchematic, WithLogger(log))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -408,7 +408,7 @@ func TestHeartbeat(t *testing.T) {
 	})
 }
 
-func TestDoppelShutdown(t *testing.T) {
+func TestShutdown(t *testing.T) {
 	type testResult struct {
 		tmpl *template.Template
 		err  error

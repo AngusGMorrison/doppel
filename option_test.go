@@ -1,3 +1,6 @@
+// option_test contains tests for functional options that are ameable to unit
+// testing. Options that require greater integration with the package as a whole
+// are excercised throughout doppel_test and cache_operatoins_test.
 package doppel
 
 import (
@@ -88,129 +91,7 @@ func TestWithGlobalTimeout(t *testing.T) {
 			t.Errorf("global timeout expired before Get returned; want request timeout to expire first")
 		}
 	})
-
 }
-
-// func TestShouldRetry(t *testing.T) {
-// 	t.Run("returns the expected output for each input", func(t *testing.T) {
-// 		retryDoppel, err := New(schematic, WithRetryTimeouts())
-// 		if err != nil {
-// 			t.Fatal(err)
-// 		}
-// 		defer retryDoppel.Shutdown(gracePeriod)
-
-// 		noRetryDoppel, err := New(schematic)
-// 		if err != nil {
-// 			t.Fatal(err)
-// 		}
-// 		defer noRetryDoppel.Shutdown(gracePeriod)
-
-// 		closed := make(chan struct{})
-// 		close(closed)
-
-// 		// Although non-exhaustive, these tests give reasonable assurance that
-// 		// shouldRetry as internally they are ORed together.
-// 		testCases := []struct {
-// 			d    *Doppel
-// 			ce   *cacheEntry
-// 			req  *request
-// 			want bool
-// 		}{
-// 			{
-// 				d:    noRetryDoppel,
-// 				ce:   &cacheEntry{closed, nil, nil},
-// 				req:  &request{refreshCache: false, ctx: context.Background()},
-// 				want: false,
-// 			},
-// 			{
-// 				d:    retryDoppel,
-// 				ce:   &cacheEntry{closed, nil, nil},
-// 				req:  &request{refreshCache: false, ctx: context.Background()},
-// 				want: false,
-// 			},
-// 			{
-// 				d:    retryDoppel,
-// 				ce:   &cacheEntry{closed, nil, context.DeadlineExceeded},
-// 				req:  &request{refreshCache: false, ctx: context.Background()},
-// 				want: true,
-// 			},
-// 			{
-// 				d:    noRetryDoppel,
-// 				ce:   &cacheEntry{closed, nil, context.Canceled},
-// 				req:  &request{refreshCache: false, ctx: context.Background()},
-// 				want: true,
-// 			},
-// 			{
-// 				d:    noRetryDoppel,
-// 				ce:   &cacheEntry{closed, nil, nil},
-// 				req:  &request{refreshCache: true, ctx: context.Background()},
-// 				want: true,
-// 			},
-// 		}
-
-// 		for _, tc := range testCases {
-// 			t.Run(fmt.Sprintf("retryTimeouts=%t, cachedErr=%q, refreshCache=%t",
-// 				tc.d.retryTimeouts, tc.ce.err, tc.req.refreshCache),
-// 				func(t *testing.T) {
-// 					if got := tc.d.shouldRetry(tc.ce, tc.req); got != tc.want {
-// 						t.Errorf("got %t, want %t", got, tc.want)
-// 					}
-// 				})
-// 		}
-// 	})
-
-// 	t.Run("blocks until cacheEntry is ready or request is interrupted", func(t *testing.T) {
-// 		d, err := New(schematic)
-// 		if err != nil {
-// 			t.Fatal(err)
-// 		}
-// 		defer d.Shutdown(gracePeriod)
-
-// 		t.Run("when cache entry becomes ready", func(t *testing.T) {
-// 			resultStream := make(chan bool)
-// 			ce := &cacheEntry{ready: make(chan struct{})}
-// 			req := &request{refreshCache: false, ctx: context.Background()}
-// 			go func() {
-// 				resultStream <- d.shouldRetry(ce, req)
-// 			}()
-
-// 			select {
-// 			case <-resultStream:
-// 				t.Error("got result before ready channel was closed")
-// 				close(ce.ready)
-// 			case <-time.After(500 * time.Millisecond):
-// 				close(ce.ready)
-// 				select {
-// 				case <-resultStream:
-// 				case <-time.After(500 * time.Millisecond):
-// 					t.Error("timed out before receiving result after closing ready chan")
-// 				}
-// 			}
-// 		})
-
-// 		t.Run("when request is interrupted", func(t *testing.T) {
-// 			ce := &cacheEntry{ready: make(chan struct{})}
-// 			ctx, cancel := context.WithTimeout(context.Background(), 0*time.Nanosecond)
-// 			defer cancel()
-// 			req := &request{ctx: ctx}
-// 			resultStream := make(chan bool)
-
-// 			go func() {
-// 				resultStream <- d.shouldRetry(ce, req)
-// 			}()
-
-// 			select {
-// 			case res := <-resultStream:
-// 				if res != false {
-// 					t.Errorf("got %t, want false", res)
-// 				}
-// 			case <-time.After(500 * time.Millisecond):
-// 				t.Fatalf("failed to unblock before timeout")
-// 				close(ce.ready)
-// 			}
-// 		})
-// 	})
-// }
 
 func TestWithExpiry(t *testing.T) {
 	// TODO
