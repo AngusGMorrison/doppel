@@ -2,7 +2,9 @@
 
 A concurrent, non-blocking, compositing cache for Go templates.
 
-doppel provides a simple, thread-safe way to compose and cache nested templates as they're required. Rather than parsing sub-templates from scratch each time they're needed, a Doppel instance compiles a named combination of templates the first time it's requested and stores it in memory. Once parsed, retrieval is on the order of nanoseconds. Common sub-templates (e.g. a recurrent nav bar) are parsed once and shared between compositions, reducing both the Doppel's memory footprint and the number of parsing operations required.
+doppel provides a simple, thread-safe way to compose and cache nested templates as they're required. Rather than parsing sub-templates from scratch each time they're needed, a Doppel instance compiles a named combination of templates the first time it's requested and stores it in memory. Once parsed, retrieval is on the order of nanoseconds.
+
+Common sub-templates (e.g. a recurrent nav bar) are parsed once and shared between compositions, reducing both the Doppel's memory footprint and the number of parsing operations required.
 
 Each Get request to the Doppel is non-blocking. Even where a template must be parsed for the first time, concurrent requests for other templates proceed freely.
 
