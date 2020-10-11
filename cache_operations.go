@@ -9,37 +9,41 @@ import (
 )
 
 type cacheEntry struct {
-	ready     chan struct{}
-	retry     chan struct{}
-	schematic *TemplateSchematic
-	tmpl      *template.Template
-	err       error
+	ready     chan struct{}      // signals ready to return results
+	retry     chan struct{}      // signals to retry parsing in subsequent requests (e.g. after cancelletion)
+	schematic *TemplateSchematic // embedded schemaitc enables reparsing if a retry is required
+	tmpl      *template.Template // the parsed template
+	err       error              // any error encountered while parsing
 }
 
-func (ce *cacheEntry) setErr(err error, retryTimeouts bool) {
-	if err == context.Canceled || retryTimeouts && err == context.DeadlineExceeded {
+func (ce *cacheEntry) signalStatus(retryTimeouts bool) {
+	if ce.err == context.Canceled || retryTimeouts && ce.err == context.DeadlineExceeded {
 		select {
 		case ce.retry <- struct{}{}:
 		default:
 		}
 		return
 	}
-	ce.err = err
+
 	close(ce.ready)
 }
 
 func (d *Doppel) parse(ce *cacheEntry, req *request) {
+	defer ce.signalStatus(d.retryTimeouts)
+
 	select {
 	case <-req.ctx.Done():
-		ce.setErr(req.ctx.Err(), d.retryTimeouts)
+		ce.err = req.ctx.Err()
 		return
 	default:
 	}
 
+	ce.err = nil // reset error in the event of a retry
+
 	if ce.schematic == nil {
 		msg := fmt.Sprintf(logMissingSchematic, req.name)
 		d.log.Printf(msg)
-		ce.setErr(errors.New(msg), d.retryTimeouts) // TODO: Improve error
+		ce.err = errors.New(msg) // TODO: Improve error
 		return
 	}
 
@@ -62,7 +66,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 
 		base, err := d.Get(ctx, ce.schematic.BaseTmplName)
 		if err != nil {
-			ce.setErr(err, d.retryTimeouts)
+			ce.err = err
 			return
 		}
 		tmpl, err = base.ParseFiles(ce.schematic.Filepaths...)
@@ -70,13 +74,11 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 
 	if err != nil {
 		d.log.Printf(logParsingError, req.name)
-		ce.setErr(err, d.retryTimeouts)
+		ce.err = err
 		return
 	}
 	d.log.Printf(logParsingSuccess, req.name)
 	ce.tmpl = tmpl
-	// TODO: How to ensure close is never called
-	close(ce.ready)
 }
 
 func (d *Doppel) deliver(ce *cacheEntry, req *request) {

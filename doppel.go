@@ -155,6 +155,10 @@ func (d *Doppel) startCache() {
 			if entry == nil {
 				d.log.Printf(logParsingTemplate, req.name)
 				tmplSchematic := d.schematic[req.name]
+				if tmplSchematic != nil {
+					tmplSchematic = tmplSchematic.Clone()
+				}
+
 				entry = &cacheEntry{
 					ready:     make(chan struct{}),
 					retry:     make(chan struct{}, 1),
