@@ -81,7 +81,7 @@ func (d *defaultLog) Printf(format string, args ...interface{}) {
 // schematic.
 func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 	if cyclic, err := IsCyclic(schematic); cyclic {
-		return nil, err // TODO: Wrap
+		return nil, errors.WithStack(err)
 	}
 
 	d := &Doppel{
@@ -205,7 +205,7 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 
 	select {
 	case <-ctx.Done():
-		return nil, DoppelError{
+		return nil, RequestError{
 			errors.WithStack(ctx.Err()),
 			name,
 			time.Since(req.start),
@@ -218,7 +218,7 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		return nil, ctx.Err()
 	case res := <-resultStream:
 		if res.err != nil {
-			return nil, DoppelError{
+			return nil, RequestError{
 				errors.Wrap(res.err, "received error from cache"),
 				name,
 				time.Since(req.start),
@@ -226,16 +226,6 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		}
 		return res.tmpl, nil
 	}
-}
-
-type DoppelError struct {
-	error
-	TargetTmpl      string
-	RequestDuration time.Duration
-}
-
-func (de DoppelError) Is(err error) bool {
-	return de.Error() == err.Error()
 }
 
 // Heartbeat returns the Doppel's heartbeat channel, which is guaranteed to be
@@ -252,7 +242,7 @@ func (d *Doppel) Shutdown(gracePeriod time.Duration) {
 	close(d.inShutdown) // signals that Get should no longer accept new requests
 	d.log.Printf("shutting down gracefully...")
 	go func() {
-		<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
+		<-time.After(gracePeriod)
 		close(d.requestStream)
 		d.log.Printf("shutdown complete")
 	}()
@@ -265,10 +255,6 @@ func (d *Doppel) Close() {
 	close(d.inShutdown)
 	close(d.requestStream)
 }
-
-// ErrDoppelShutdown is returned in response to requests to a Doppel
-// with an closed cache.
-var ErrDoppelShutdown = errors.New("Doppel is in shutdown")
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If
 // true, the accompanying error describes which TemplateSchematics

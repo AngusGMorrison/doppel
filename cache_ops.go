@@ -44,7 +44,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 	if ce.schematic == nil {
 		msg := fmt.Sprintf(logMissingSchematic, req.name)
 		d.log.Printf(msg)
-		ce.err = DoppelError{
+		ce.err = RequestError{
 			errors.WithStack(ErrSchematicNotFound),
 			req.name,
 			time.Since(req.start),
@@ -78,14 +78,12 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 
 	if err != nil {
 		d.log.Printf(logParsingError, req.name)
-		ce.err = DoppelError{err, req.name, time.Since(req.start)}
+		ce.err = RequestError{err, req.name, time.Since(req.start)}
 		return
 	}
 	d.log.Printf(logParsingSuccess, req.name)
 	ce.tmpl = tmpl
 }
-
-var ErrSchematicNotFound = errors.New("requested *TemplateSchematic not found")
 
 func (d *Doppel) deliver(ce *cacheEntry, req *request) {
 loop:

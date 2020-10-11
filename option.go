@@ -47,7 +47,7 @@ func WithRetryTimeouts() CacheOption {
 
 // }
 
-// TODO - stretch: Implement memory limit.
+// TODO: Implement memory limit.
 // func WithMemoryLimit(limitInMB uint64) Option {
 
 // }

@@ -93,7 +93,3 @@ func TestWithGlobalTimeout(t *testing.T) {
 		}
 	})
 }
-
-func TestWithExpiry(t *testing.T) {
-	// TODO
-}
