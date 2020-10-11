@@ -2,7 +2,6 @@ package doppel
 
 import (
 	"context"
-	"fmt"
 	"testing"
 )
 
@@ -31,8 +30,8 @@ func TestInitialize(t *testing.T) {
 	})
 }
 
-func TestGet(t *testing.T) {
-	t.Run(fmt.Sprintf("returns the requested template"), func(t *testing.T) {
+func TestGlobalGet(t *testing.T) {
+	t.Run("returns the requested template", func(t *testing.T) {
 		target := "withBody1"
 		err := Initialize(schematic)
 		if err != nil {
@@ -61,4 +60,19 @@ func TestGet(t *testing.T) {
 			t.Errorf("got err %q, want ErrNotInitialized", err)
 		}
 	})
+}
+
+func TestGlobalShutdown(t *testing.T) {
+	err := Initialize(schematic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Shutdown(gracePeriod)
+
+	// Ensure that the underlying globalCache.Shutdown has been called, which
+	// is tested separately.
+	_, err = Get(context.Background(), "base")
+	if err != ErrDoppelShutdown {
+		t.Errorf("want ErrDoppelClosed, got %v", err)
+	}
 }

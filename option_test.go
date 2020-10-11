@@ -1,11 +1,16 @@
+// option_test contains tests for functional options that are ameable to unit
+// testing. Options that require greater integration with the package as a whole
+// are excercised throughout doppel_test and cache_operatoins_test.
 package doppel
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Go's log package recycles its buffer for each log entry, causing a data
@@ -42,25 +47,49 @@ func TestWithLogger(t *testing.T) {
 		if gotLogs := l.String(); gotLogs == "" {
 			t.Error("failed to log operation, got empty string")
 		}
-		fmt.Println(l.String())
+	})
+}
+
+func TestWithGlobalTimeout(t *testing.T) {
+	t.Run("Get returns context.DeadlineExceeded when timeout expires", func(t *testing.T) {
+		globalTimeout := 1 * time.Nanosecond
+		d, err := New(schematic, WithGlobalTimeout(globalTimeout))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+
+		_, err = d.Get(context.Background(), "base")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("want context.DeadlineExceeded, got: %v", err)
+		}
 	})
 
-	// TODO: Test for specific logging events.
-}
+	t.Run("Get times out after the shortest of global timeout and request timeout", func(t *testing.T) {
+		globalTimeout := 1 * time.Millisecond
+		d, err := New(schematic, WithGlobalTimeout(globalTimeout))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Shutdown(gracePeriod)
 
-func TestWithGlobalTimemout(t *testing.T) {
-	// TODO
-}
+		reqTimeout := 1 * time.Nanosecond
+		errStream := make(chan error)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), reqTimeout)
+			defer cancel()
+			_, err := d.Get(ctx, "withBody1")
+			errStream <- err
+		}()
 
-func TestWithTimeout(t *testing.T) {
-	// TODO
-	// Does it make sense to reattempt timed-out requests, when all
-	// requests will have the same timeout? Do requests need
-	// functional options of their own?
-}
-
-func TestWithTimeoutRetry(t *testing.T) {
-	t.Run("will reattempt parsing if a previous attempt timed out", func(t *testing.T) {
-		// TODO: Requires request timeout
+		select {
+		case err := <-errStream:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("request timeout expired with error \"%v\"; want context.DeadlineExceeded",
+					err)
+			}
+		case <-time.After(globalTimeout):
+			t.Errorf("global timeout expired before Get returned; want request timeout to expire first")
+		}
 	})
 }

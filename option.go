@@ -23,7 +23,7 @@ func WithLogger(log logger) CacheOption {
 
 const (
 	logRequestReceived       = "received request for template %q"
-	logRequestCanceled       = "request for template %q canceled"
+	logRequestInterrupted    = "request for template %q interrupted"
 	logParsingTemplate       = "parsing template %q"
 	logMissingSchematic      = "missing schematic for template %q"
 	logGettingBaseTemplate   = "getting base template %q for %q"
@@ -34,21 +34,11 @@ const (
 	logDeliveringTemplate    = "delivering template %q"
 )
 
-// WithTimeoutRetry causes cache entries that have entered an error state as
-// a result of request timeout to be retried.
-func WithTimeoutRetry() CacheOption {
+// WithRetryTimeouts causes cache entries in an error state as a result of
+// timeout or cancellation to be retried.
+func WithRetryTimeouts() CacheOption {
 	return func(d *Doppel) {
-		d.timeoutRetry = true // TODO: implement
-	}
-}
-
-// RequestOption allows configuration of individual Get requests.
-type RequestOption func(*request)
-
-// WithCacheRefresh forces the cached result to be reparsed.
-func WithCacheRefresh() RequestOption {
-	return func(r *request) {
-		r.refreshCache = true // TODO: implement
+		d.retryTimeouts = true
 	}
 }
 
@@ -57,7 +47,7 @@ func WithCacheRefresh() RequestOption {
 
 // }
 
-// TODO - stretch: Implement memory limit.
+// TODO: Implement memory limit.
 // func WithMemoryLimit(limitInMB uint64) Option {
 
 // }

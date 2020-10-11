@@ -3,6 +3,7 @@ package doppel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"math/rand"
@@ -111,9 +112,9 @@ func TestNew(t *testing.T) {
 			defer d.Shutdown(gracePeriod)
 
 			req := &request{
-				done:         make(chan struct{}),
 				name:         "base",
 				resultStream: make(chan<- *result, 1),
+				ctx:          context.Background(),
 			}
 
 			select {
@@ -125,7 +126,7 @@ func TestNew(t *testing.T) {
 	})
 }
 
-func TestDoppelGet(t *testing.T) {
+func TestGet(t *testing.T) {
 	testCases := []struct {
 		schematicName string
 		files         []string
@@ -269,16 +270,16 @@ func TestDoppelGet(t *testing.T) {
 		}()
 
 		for res := range resultStream {
-			fmt.Printf("\tcalling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
-			switch res.err {
-			case nil:
+			fmt.Printf("\tcalling d.Get(%q) with timeout %d ns...\n", res.target, res.timeout)
+			switch {
+			case res.err == nil:
 				fmt.Println("\t✔ returned template before timeout")
-			case context.DeadlineExceeded:
+			case errors.Is(res.err, context.DeadlineExceeded):
 				fmt.Println("\t✔ timed out with context.DeadlineExceeded")
 			default:
 				t.Fatalf(
-					"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
-					res.target, res.timeout/1e3, res.err,
+					"d.Get(%q) with timeout %d ns: got error %q, want context.DeadlineExceeded",
+					res.target, res.timeout, res.err,
 				)
 			}
 		}
@@ -318,7 +319,7 @@ func TestDoppelGet(t *testing.T) {
 		testSchematic := schematic.Clone()
 		testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
 		log := &testLogger{out: &bytes.Buffer{}}
-		d, err := New(schematic, WithLogger(log))
+		d, err := New(testSchematic, WithLogger(log))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -437,7 +438,7 @@ func TestShutdown(t *testing.T) {
 	if tmpl != nil {
 		t.Error("Doppel accepted and completed new request after shutdown")
 	}
-	if err != ErrDoppelClosed {
+	if err != ErrDoppelShutdown {
 		t.Errorf("got err %v, want ErrDoppelClosed", err)
 	}
 }
@@ -456,7 +457,7 @@ func TestClose(t *testing.T) {
 		t.Errorf("heartbeat failed to close")
 	}
 
-	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelClosed {
+	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelShutdown {
 		t.Errorf("got %v, want ErrDoppelClosed", err)
 	}
 }
@@ -469,7 +470,7 @@ func Test_StressTest(t *testing.T) {
 		err    error
 	}
 
-	d, err := New(schematic)
+	d, err := New(schematic, WithRetryTimeouts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,9 +486,18 @@ func Test_StressTest(t *testing.T) {
 
 	for i := 0; i < 5000; i++ {
 		target := keys[rng.Intn(len(keys))]
+		timeout := rng.Intn(1e4)
 		wg.Add(1)
 		go func() {
-			_, err := d.Get(context.Background(), target)
+			var err error
+			if timeout%2 == 0 {
+				_, err = d.Get(context.Background(), target)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(timeout)*time.Nanosecond)
+				defer cancel()
+				_, err = d.Get(ctx, target)
+			}
 			resultStream <- &testResult{target, err}
 			wg.Done()
 		}()
@@ -499,7 +509,7 @@ func Test_StressTest(t *testing.T) {
 	}()
 
 	for res := range resultStream {
-		if res.err != nil {
+		if res.err != nil && !errors.Is(res.err, context.DeadlineExceeded) {
 			t.Errorf("d.Get(%q) returned error %q", res.target, res.err)
 		}
 	}

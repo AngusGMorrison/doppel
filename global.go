@@ -23,7 +23,7 @@ func Initialize(schematic CacheSchematic, opts ...CacheOption) error {
 		select {
 		case <-globalCache.done:
 		default:
-			return ErrAlreadyInitialized
+			return errors.WithStack(ErrAlreadyInitialized)
 		}
 	}
 	var err error
@@ -31,25 +31,17 @@ func Initialize(schematic CacheSchematic, opts ...CacheOption) error {
 	return err
 }
 
-// ErrAlreadyInitialized is returned when the user attempts to
-// call Initialize when the global cache is already running.
-var ErrAlreadyInitialized = errors.New("the global cache is already running")
-
 // Get returns a copy of the name template if it exists in the cache,
 // or an error if it does not.
 //
 // If Get is called before Initialize, ErrNotInitialized is returned.
 func Get(ctx context.Context, name string) (*template.Template, error) {
 	if globalCache == nil {
-		return nil, ErrNotInitialized // TODO: wrap error at boundary
+		return nil, errors.WithStack(ErrNotInitialized)
 	}
 
 	return globalCache.Get(ctx, name)
 }
-
-// ErrNotInitialized is returned when a Get request is made to the
-// global cache before Initialize is called.
-var ErrNotInitialized = errors.New("Get was called before initializing the global cache")
 
 // Shutdown signals to Get that it should immediately stop accepting
 // new requests. It then waits for gracePeriod to elapse before

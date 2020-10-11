@@ -27,7 +27,7 @@ type Doppel struct {
 	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
 	done          chan struct{} // signals that the work loop has returned
 	log           logger
-	timeoutRetry  bool // flags whether to retry parsing templates that have previously timed out
+	retryTimeouts bool // flags whether to retry parsing templates that have previously timed out
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -72,7 +72,7 @@ type logger interface {
 // the cache's work loop.
 type defaultLog struct{}
 
-func (d *defaultLog) Printf(fmt string, args ...interface{}) {
+func (d *defaultLog) Printf(format string, args ...interface{}) {
 	// No-op.
 }
 
@@ -81,7 +81,7 @@ func (d *defaultLog) Printf(fmt string, args ...interface{}) {
 // schematic.
 func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 	if cyclic, err := IsCyclic(schematic); cyclic {
-		return nil, err // TODO: Wrap
+		return nil, errors.WithStack(err)
 	}
 
 	d := &Doppel{
@@ -103,10 +103,14 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 }
 
 type request struct {
-	name         string          // the name of the template to fetch
-	done         <-chan struct{} // closed by Get when the request should be canceled or times out
-	resultStream chan<- *result  // used by Get to receive results from the cache
-	refreshCache bool            // disable caching for the request // TODO: test
+	name         string         // the name of the template to fetch
+	resultStream chan<- *result // used by Get to receive results from the cache
+	start        time.Time      // calculate request runtime
+
+	// While generally inadvisable to store contexts in structs, ctx functions
+	// solely as a messenger, informing downstream Get requests when the
+	// original request has timed out or been canceled.
+	ctx context.Context
 }
 
 type result struct {
@@ -121,7 +125,6 @@ type result struct {
 // further requests for that template will return the original error.
 //
 // Each request to the cache is preemptible via its context.
-// TODO: Implement template expiry.
 func (d *Doppel) startCache() {
 	// Create heartbeat and request stream synchronously to ensure
 	// a caller can never receive nil channels.
@@ -132,7 +135,7 @@ func (d *Doppel) startCache() {
 		defer close(d.heartbeat)
 		defer close(d.done)
 
-		templates := make(map[string]*cacheEntry)
+		cache := make(map[string]*cacheEntry)
 		for req := range d.requestStream {
 			d.log.Printf(logRequestReceived, req.name)
 			select {
@@ -142,19 +145,27 @@ func (d *Doppel) startCache() {
 			}
 
 			select {
-			case <-req.done:
-				d.log.Printf(logRequestCanceled, req.name)
+			case <-req.ctx.Done():
+				d.log.Printf(logRequestInterrupted, req.name)
 				continue
 			default:
 			}
 
-			entry := templates[req.name]
-			if entry == nil || entry.shouldRetry(req) {
+			entry := cache[req.name]
+			if entry == nil {
 				d.log.Printf(logParsingTemplate, req.name)
-				entry = &cacheEntry{ready: make(chan struct{})}
-				templates[req.name] = entry
 				tmplSchematic := d.schematic[req.name]
-				go d.parse(entry, req, tmplSchematic)
+				if tmplSchematic != nil {
+					tmplSchematic = tmplSchematic.Clone()
+				}
+
+				entry = &cacheEntry{
+					ready:     make(chan struct{}),
+					retry:     make(chan struct{}, 1),
+					schematic: tmplSchematic,
+				}
+				cache[req.name] = entry
+				go d.parse(entry, req)
 			}
 			go d.deliver(entry, req)
 		}
@@ -166,39 +177,39 @@ func (d *Doppel) startCache() {
 func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, error) {
 	select {
 	case <-d.inShutdown:
-		return nil, ErrDoppelClosed
+		return nil, ErrDoppelShutdown
 	default:
 	}
 
-	// Contexts aren't suitable as struct fields, so we coordinate the action
-	// of recursive Get routines with a done channel that is closed if the
-	// top-level context expires or is cancelled.
-	//
-	// done should be closed at all exit points to ensure the signal cascades
-	// correctly.
-	done := make(chan struct{})
-	defer close(done)
-
-	// Buffer resultStream for cases where timeout expires concurrently with results being sent
+	// Buffer resultStream for cases where timeout expires concurrently with results being sent.
 	resultStream := make(chan *result, 1)
 	req := &request{
-		done:         done,
 		name:         name,
 		resultStream: resultStream,
-		refreshCache: false,
+		start:        time.Now(),
 	}
 
 	if d.globalTimeout > 0 {
+		// WithTimeout retains the the parent context's timeout if
+		// d.globalTimeout occurs later.
 		var cancel context.CancelFunc
-		// WithTimeout retains the the parent context's timeout if the child's
-		// would occur later.
 		ctx, cancel = context.WithTimeout(ctx, d.globalTimeout)
 		defer cancel()
 	}
 
+	// Wrap ctx to enforce cancellation of recursive Get requests if the
+	// original request returns early (e.g. due to timeout).
+	ctx, cancel := context.WithCancel(ctx)
+	req.ctx = ctx
+	defer cancel()
+
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, RequestError{
+			errors.WithStack(ctx.Err()),
+			name,
+			time.Since(req.start),
+		}
 	case d.requestStream <- req:
 	}
 
@@ -207,16 +218,18 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		return nil, ctx.Err()
 	case res := <-resultStream:
 		if res.err != nil {
-			return nil, res.err
+			return nil, RequestError{
+				errors.Wrap(res.err, "received error from cache"),
+				name,
+				time.Since(req.start),
+			}
 		}
 		return res.tmpl, nil
 	}
 }
 
-var errRequestTerminated = errors.New("request was terminated before completion") // TODO: Improve
-
-// Heartbeat returns the Doppel's heartbeat channel, which is
-// guaranteed to be non-nil.
+// Heartbeat returns the Doppel's heartbeat channel, which is guaranteed to be
+// non-nil.
 func (d *Doppel) Heartbeat() <-chan struct{} {
 	return d.heartbeat
 }
@@ -228,9 +241,11 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 func (d *Doppel) Shutdown(gracePeriod time.Duration) {
 	close(d.inShutdown) // signals that Get should no longer accept new requests
 	d.log.Printf("shutting down gracefully...")
-	<-time.After(gracePeriod) // TODO: Create a way of waiting until the request stream is drained.
-	close(d.requestStream)
-	d.log.Printf("shutdown complete")
+	go func() {
+		<-time.After(gracePeriod)
+		close(d.requestStream)
+		d.log.Printf("shutdown complete")
+	}()
 }
 
 // Close forces the Doppel to shut down without accepting pending
@@ -240,10 +255,6 @@ func (d *Doppel) Close() {
 	close(d.inShutdown)
 	close(d.requestStream)
 }
-
-// ErrDoppelClosed is returned in response to requests to a Doppel
-// with an closed cache.
-var ErrDoppelClosed = errors.New("the Doppel's cache has already been closed")
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If
 // true, the accompanying error describes which TemplateSchematics
