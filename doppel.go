@@ -238,6 +238,7 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 // new requests. It then waits for gracePeriod to elapse before
 // closing the request stream. If any requests are still active when
 // the request stream is closed, Get will panic.
+// TODO: Make Shutdown safe to call twice.
 func (d *Doppel) Shutdown(gracePeriod time.Duration) {
 	close(d.inShutdown) // signals that Get should no longer accept new requests
 	d.log.Printf("shutting down gracefully...")
@@ -251,6 +252,7 @@ func (d *Doppel) Shutdown(gracePeriod time.Duration) {
 // Close forces the Doppel to shut down without accepting pending
 // requests. When pending requests are subsequently sent to the
 // request stream, Get will panic.
+// TODO: Make Close safe to call twice.
 func (d *Doppel) Close() {
 	close(d.inShutdown)
 	close(d.requestStream)
