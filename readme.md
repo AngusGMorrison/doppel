@@ -6,7 +6,7 @@ doppel provides a simple, thread-safe way to compose and cache nested templates 
 
 Common sub-templates (e.g. a recurrent nav bar) are parsed once and shared between compositions, reducing both the Doppel's memory footprint and the number of parsing operations required.
 
-Each Get request to the Doppel is non-blocking. Even where a template must be parsed for the first time, concurrent requests for other templates proceed freely.
+Each Get request to the Doppel is non-blocking and preemptible via a `context.Context`. Even where a template must be parsed for the first time, concurrent requests for other templates proceed freely.
 
 **Package documentation**: https://godoc.org/github.com/AngusGMorrison/doppel
 
