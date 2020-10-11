@@ -408,7 +408,7 @@ func TestHeartbeat(t *testing.T) {
 	})
 }
 
-func TestShutdown(t *testing.T) {
+func TestDoppelShutdown(t *testing.T) {
 	type testResult struct {
 		tmpl *template.Template
 		err  error

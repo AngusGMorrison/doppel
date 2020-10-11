@@ -61,3 +61,18 @@ func TestGet(t *testing.T) {
 		}
 	})
 }
+
+func TestShutdown(t *testing.T) {
+	err := Initialize(schematic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Shutdown(gracePeriod)
+
+	// Ensure that the underlying globalCache.Shutdown has been called, which
+	// is tested separately.
+	_, err = Get(context.Background(), "base")
+	if err != ErrDoppelClosed {
+		t.Errorf("want ErrDoppelClosed, got %v", err)
+	}
+}
