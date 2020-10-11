@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -27,7 +28,8 @@ type Doppel struct {
 	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
 	done          chan struct{} // signals that the work loop has returned
 	log           logger
-	retryTimeouts bool // flags whether to retry parsing templates that have previously timed out
+	retryTimeouts bool      // flags whether to retry parsing templates that have previously timed out
+	once          sync.Once // protects inShutdown and requestSteam from multiple closures
 }
 
 // A CacheSchematic is an acyclic graph of named TemplateSchematics
@@ -238,24 +240,30 @@ func (d *Doppel) Heartbeat() <-chan struct{} {
 // new requests. It then waits for gracePeriod to elapse before
 // closing the request stream. If any requests are still active when
 // the request stream is closed, Get will panic.
-// TODO: Make Shutdown safe to call twice.
+//
+// Subseqent calls to Shutdown are no-ops.
 func (d *Doppel) Shutdown(gracePeriod time.Duration) {
-	close(d.inShutdown) // signals that Get should no longer accept new requests
-	d.log.Printf("shutting down gracefully...")
-	go func() {
-		<-time.After(gracePeriod)
-		close(d.requestStream)
-		d.log.Printf("shutdown complete")
-	}()
+	d.once.Do(func() {
+		close(d.inShutdown) // signals that Get should no longer accept new requests
+		d.log.Printf("shutting down gracefully...")
+		go func() {
+			<-time.After(gracePeriod)
+			close(d.requestStream)
+			d.log.Printf("shutdown complete")
+		}()
+	})
 }
 
 // Close forces the Doppel to shut down without accepting pending
 // requests. When pending requests are subsequently sent to the
 // request stream, Get will panic.
-// TODO: Make Close safe to call twice.
+//
+// Subsequent calls to Close are no-ops.
 func (d *Doppel) Close() {
-	close(d.inShutdown)
-	close(d.requestStream)
+	d.once.Do(func() {
+		close(d.inShutdown)
+		close(d.requestStream)
+	})
 }
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If

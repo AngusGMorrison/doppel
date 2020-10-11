@@ -410,56 +410,122 @@ func TestHeartbeat(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
-	type testResult struct {
-		tmpl *template.Template
-		err  error
-	}
+	t.Run("waits until gracePeriod elapses to close requestStream", func(t *testing.T) {
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Shutdown(500 * time.Millisecond)
 
-	d, err := New(schematic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	go d.Shutdown(500 * time.Millisecond)
+		hb := d.Heartbeat()
+		select {
+		case <-hb:
+			t.Errorf("heartbeat was closed before graceful shutdown period elapsed")
+		case <-time.After(450 * time.Millisecond):
+		}
 
-	hb := d.Heartbeat()
-	select {
-	case <-hb:
-		t.Errorf("heartbeat was closed before graceful shutdown period elapsed")
-	case <-time.After(450 * time.Millisecond):
-	}
+		select {
+		case <-hb:
+		case <-time.After(100 * time.Millisecond):
+			t.Errorf("heartbeat failed to close")
+		}
+	})
 
-	select {
-	case <-hb:
-	case <-time.After(500 * time.Millisecond):
-		t.Errorf("heartbeat failed to close")
-	}
+	t.Run("immediately prevents Get accepting new requests", func(t *testing.T) {
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Shutdown(gracePeriod)
 
-	tmpl, err := d.Get(context.Background(), "base")
-	if tmpl != nil {
-		t.Error("Doppel accepted and completed new request after shutdown")
-	}
-	if err != ErrDoppelShutdown {
-		t.Errorf("got err %v, want ErrDoppelClosed", err)
-	}
+		tmpl, err := d.Get(context.Background(), "base")
+		if tmpl != nil {
+			t.Error("Doppel accepted and completed new request after shutdown")
+		}
+		if err != ErrDoppelShutdown {
+			t.Errorf("got err %v, want ErrDoppelClosed", err)
+		}
+	})
+
+	t.Run("is safe to call twice", func(t *testing.T) {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Errorf("call to d.Shutdown panicked")
+			}
+		}()
+
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Shutdown(gracePeriod)
+		d.Shutdown(gracePeriod)
+	})
+
+	t.Run("is safe to call in conjunction with Close", func(t *testing.T) {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Errorf("call to d.Shutdown panicked")
+			}
+		}()
+
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Close()
+		d.Shutdown(gracePeriod)
+	})
 }
 
 func TestClose(t *testing.T) {
-	d, err := New(schematic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.Close()
+	t.Run("immediately closes d.requestStream", func(t *testing.T) {
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Close()
 
-	hb := d.Heartbeat()
-	select {
-	case <-hb:
-	case <-time.After(500 * time.Millisecond):
-		t.Errorf("heartbeat failed to close")
-	}
+		select {
+		case <-d.requestStream:
+		default:
+			t.Errorf("heartbeat failed to close")
+		}
 
-	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelShutdown {
-		t.Errorf("got %v, want ErrDoppelClosed", err)
-	}
+		if _, err := d.Get(context.Background(), "base"); err != ErrDoppelShutdown {
+			t.Errorf("got %v, want ErrDoppelShutdown", err)
+		}
+	})
+
+	t.Run("is safe to call twice", func(t *testing.T) {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Errorf("call to d.Close panicked")
+			}
+		}()
+
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Close()
+		d.Close()
+	})
+
+	t.Run("is safe to call in conjunction with Shutdown", func(t *testing.T) {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Errorf("call to d.Close panicked")
+			}
+		}()
+
+		d, err := New(schematic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Shutdown(gracePeriod)
+		d.Close()
+	})
 }
 
 // Run StressTest with the -race flag to ensure no race conditions
