@@ -72,7 +72,7 @@ func TestGlobalShutdown(t *testing.T) {
 	// Ensure that the underlying globalCache.Shutdown has been called, which
 	// is tested separately.
 	_, err = Get(context.Background(), "base")
-	if err != ErrDoppelClosed {
+	if err != ErrDoppelShutdown {
 		t.Errorf("want ErrDoppelClosed, got %v", err)
 	}
 }

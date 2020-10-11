@@ -6,6 +6,7 @@ package doppel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -59,7 +60,7 @@ func TestWithGlobalTimeout(t *testing.T) {
 		defer d.Close()
 
 		_, err = d.Get(context.Background(), "base")
-		if err != context.DeadlineExceeded {
+		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("want context.DeadlineExceeded, got: %v", err)
 		}
 	})
@@ -83,7 +84,7 @@ func TestWithGlobalTimeout(t *testing.T) {
 
 		select {
 		case err := <-errStream:
-			if err != context.DeadlineExceeded {
+			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("request timeout expired with error \"%v\"; want context.DeadlineExceeded",
 					err)
 			}

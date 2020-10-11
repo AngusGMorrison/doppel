@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -17,7 +18,7 @@ type cacheEntry struct {
 }
 
 func (ce *cacheEntry) signalStatus(retryTimeouts bool) {
-	if ce.err == context.Canceled || retryTimeouts && ce.err == context.DeadlineExceeded {
+	if errors.Is(ce.err, context.Canceled) || retryTimeouts && errors.Is(ce.err, context.DeadlineExceeded) {
 		select {
 		case ce.retry <- struct{}{}:
 		default:
@@ -33,7 +34,7 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 
 	select {
 	case <-req.ctx.Done():
-		ce.err = req.ctx.Err()
+		ce.err = errors.WithStack(req.ctx.Err())
 		return
 	default:
 	}
@@ -43,7 +44,11 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 	if ce.schematic == nil {
 		msg := fmt.Sprintf(logMissingSchematic, req.name)
 		d.log.Printf(msg)
-		ce.err = errors.New(msg) // TODO: Improve error
+		ce.err = DoppelError{
+			errors.WithStack(ErrSchematicNotFound),
+			req.name,
+			time.Since(req.start),
+		}
 		return
 	}
 
@@ -60,26 +65,27 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			<-req.ctx.Done() // guaranteed to be closed when the parent Get returns
-			// TODO: Test this guarantee.
 			cancel()
 		}()
-
 		base, err := d.Get(ctx, ce.schematic.BaseTmplName)
 		if err != nil {
 			ce.err = err
 			return
 		}
+
 		tmpl, err = base.ParseFiles(ce.schematic.Filepaths...)
 	}
 
 	if err != nil {
 		d.log.Printf(logParsingError, req.name)
-		ce.err = err
+		ce.err = DoppelError{err, req.name, time.Since(req.start)}
 		return
 	}
 	d.log.Printf(logParsingSuccess, req.name)
 	ce.tmpl = tmpl
 }
+
+var ErrSchematicNotFound = errors.New("requested *TemplateSchematic not found")
 
 func (d *Doppel) deliver(ce *cacheEntry, req *request) {
 loop:

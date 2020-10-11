@@ -105,6 +105,7 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 type request struct {
 	name         string         // the name of the template to fetch
 	resultStream chan<- *result // used by Get to receive results from the cache
+	start        time.Time      // calculate request runtime
 
 	// While generally inadvisable to store contexts in structs, ctx functions
 	// solely as a messenger, informing downstream Get requests when the
@@ -124,7 +125,6 @@ type result struct {
 // further requests for that template will return the original error.
 //
 // Each request to the cache is preemptible via its context.
-// TODO: Implement template expiry.
 func (d *Doppel) startCache() {
 	// Create heartbeat and request stream synchronously to ensure
 	// a caller can never receive nil channels.
@@ -177,22 +177,22 @@ func (d *Doppel) startCache() {
 func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, error) {
 	select {
 	case <-d.inShutdown:
-		return nil, ErrDoppelClosed
+		return nil, ErrDoppelShutdown
 	default:
 	}
 
 	// Buffer resultStream for cases where timeout expires concurrently with results being sent.
 	resultStream := make(chan *result, 1)
 	req := &request{
-		// done:         done,
 		name:         name,
 		resultStream: resultStream,
+		start:        time.Now(),
 	}
 
 	if d.globalTimeout > 0 {
-		var cancel context.CancelFunc
 		// WithTimeout retains the the parent context's timeout if
 		// d.globalTimeout occurs later.
+		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, d.globalTimeout)
 		defer cancel()
 	}
@@ -205,7 +205,11 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, DoppelError{
+			errors.WithStack(ctx.Err()),
+			name,
+			time.Since(req.start),
+		}
 	case d.requestStream <- req:
 	}
 
@@ -214,10 +218,24 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		return nil, ctx.Err()
 	case res := <-resultStream:
 		if res.err != nil {
-			return nil, res.err
+			return nil, DoppelError{
+				errors.Wrap(res.err, "received error from cache"),
+				name,
+				time.Since(req.start),
+			}
 		}
 		return res.tmpl, nil
 	}
+}
+
+type DoppelError struct {
+	error
+	TargetTmpl      string
+	RequestDuration time.Duration
+}
+
+func (de DoppelError) Is(err error) bool {
+	return de.Error() == err.Error()
 }
 
 // Heartbeat returns the Doppel's heartbeat channel, which is guaranteed to be
@@ -248,9 +266,9 @@ func (d *Doppel) Close() {
 	close(d.requestStream)
 }
 
-// ErrDoppelClosed is returned in response to requests to a Doppel
+// ErrDoppelShutdown is returned in response to requests to a Doppel
 // with an closed cache.
-var ErrDoppelClosed = errors.New("the Doppel's cache has already been closed")
+var ErrDoppelShutdown = errors.New("Doppel is in shutdown")
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If
 // true, the accompanying error describes which TemplateSchematics

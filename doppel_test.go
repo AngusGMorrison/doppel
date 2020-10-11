@@ -3,6 +3,7 @@ package doppel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"math/rand"
@@ -269,16 +270,16 @@ func TestGet(t *testing.T) {
 		}()
 
 		for res := range resultStream {
-			fmt.Printf("\tcalling d.Get(%q) with timeout %d µs...\n", res.target, res.timeout/1e3)
-			switch res.err {
-			case nil:
+			fmt.Printf("\tcalling d.Get(%q) with timeout %d ns...\n", res.target, res.timeout)
+			switch {
+			case res.err == nil:
 				fmt.Println("\t✔ returned template before timeout")
-			case context.DeadlineExceeded:
+			case errors.Is(res.err, context.DeadlineExceeded):
 				fmt.Println("\t✔ timed out with context.DeadlineExceeded")
 			default:
 				t.Fatalf(
-					"d.Get(%q) with timeout %d µs: got error %q, want ErrRequestTimeout",
-					res.target, res.timeout/1e3, res.err,
+					"d.Get(%q) with timeout %d ns: got error %q, want context.DeadlineExceeded",
+					res.target, res.timeout, res.err,
 				)
 			}
 		}
@@ -437,7 +438,7 @@ func TestShutdown(t *testing.T) {
 	if tmpl != nil {
 		t.Error("Doppel accepted and completed new request after shutdown")
 	}
-	if err != ErrDoppelClosed {
+	if err != ErrDoppelShutdown {
 		t.Errorf("got err %v, want ErrDoppelClosed", err)
 	}
 }
@@ -456,7 +457,7 @@ func TestClose(t *testing.T) {
 		t.Errorf("heartbeat failed to close")
 	}
 
-	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelClosed {
+	if _, err := d.Get(context.Background(), "base"); err != ErrDoppelShutdown {
 		t.Errorf("got %v, want ErrDoppelClosed", err)
 	}
 }
@@ -508,7 +509,7 @@ func Test_StressTest(t *testing.T) {
 	}()
 
 	for res := range resultStream {
-		if res.err != nil && res.err != context.DeadlineExceeded {
+		if res.err != nil && !errors.Is(res.err, context.DeadlineExceeded) {
 			t.Errorf("d.Get(%q) returned error %q", res.target, res.err)
 		}
 	}
