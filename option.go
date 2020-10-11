@@ -42,16 +42,6 @@ func WithRetryTimeouts() CacheOption {
 	}
 }
 
-// RequestOption allows configuration of individual Get requests.
-type RequestOption func(*request)
-
-// WithCacheRefresh forces the cached result to be reparsed.
-func WithCacheRefresh() RequestOption {
-	return func(r *request) {
-		r.refreshCache = true
-	}
-}
-
 // TODO: Implement stale template expiry.
 // func WithExpiry(expireAfter time.Duration) Option {
 

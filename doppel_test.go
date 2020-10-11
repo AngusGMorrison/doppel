@@ -469,7 +469,7 @@ func Test_StressTest(t *testing.T) {
 		err    error
 	}
 
-	d, err := New(schematic)
+	d, err := New(schematic, WithRetryTimeouts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,9 +485,18 @@ func Test_StressTest(t *testing.T) {
 
 	for i := 0; i < 5000; i++ {
 		target := keys[rng.Intn(len(keys))]
+		timeout := rng.Intn(1e4)
 		wg.Add(1)
 		go func() {
-			_, err := d.Get(context.Background(), target)
+			var err error
+			if timeout%2 == 0 {
+				_, err = d.Get(context.Background(), target)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(),
+					time.Duration(timeout)*time.Nanosecond)
+				defer cancel()
+				_, err = d.Get(ctx, target)
+			}
 			resultStream <- &testResult{target, err}
 			wg.Done()
 		}()
@@ -499,7 +508,7 @@ func Test_StressTest(t *testing.T) {
 	}()
 
 	for res := range resultStream {
-		if res.err != nil {
+		if res.err != nil && res.err != context.DeadlineExceeded {
 			t.Errorf("d.Get(%q) returned error %q", res.target, res.err)
 		}
 	}

@@ -105,7 +105,6 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 type request struct {
 	name         string         // the name of the template to fetch
 	resultStream chan<- *result // used by Get to receive results from the cache
-	refreshCache bool           // disable caching for the request // TODO: test
 
 	// While generally inadvisable to store contexts in structs, ctx functions
 	// solely as a messenger, informing downstream Get requests when the
@@ -153,12 +152,16 @@ func (d *Doppel) startCache() {
 			}
 
 			entry := cache[req.name]
-			if entry == nil || d.shouldRetry(entry, req) {
+			if entry == nil {
 				d.log.Printf(logParsingTemplate, req.name)
-				entry = &cacheEntry{ready: make(chan struct{})}
-				cache[req.name] = entry
 				tmplSchematic := d.schematic[req.name]
-				go d.parse(entry, req, tmplSchematic)
+				entry = &cacheEntry{
+					ready:     make(chan struct{}),
+					retry:     make(chan struct{}, 1),
+					schematic: tmplSchematic,
+				}
+				cache[req.name] = entry
+				go d.parse(entry, req)
 			}
 			go d.deliver(entry, req)
 		}
@@ -180,7 +183,6 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		// done:         done,
 		name:         name,
 		resultStream: resultStream,
-		refreshCache: false,
 	}
 
 	if d.globalTimeout > 0 {
@@ -213,8 +215,6 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 		return res.tmpl, nil
 	}
 }
-
-var errRequestInterrupted = errors.New("request timed out or was cancelled before completion") // TODO: Improve
 
 // Heartbeat returns the Doppel's heartbeat channel, which is guaranteed to be
 // non-nil.
