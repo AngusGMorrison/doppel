@@ -24,6 +24,8 @@ schematic := CacheSchematic{
 
 d, err := doppel.New(schematic)
 // ...
+tmpl, err := d.Get(context.Background(), "homepage")
+// ...
 ```
 
 When `homepage` is requested for the first time, it requests the `nav` template from the cache. The first time `nav` is requested, it will request `base` from the cache. However, if `nav` has previously been requested, its cached value is a composition of `nav` and `base`, so `base` does not require a lookup.
