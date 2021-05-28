@@ -3,6 +3,8 @@ package doppel
 import (
 	"context"
 	"testing"
+
+	"github.com/pkg/errors"
 )
 
 func TestInitialize(t *testing.T) {
@@ -24,7 +26,7 @@ func TestInitialize(t *testing.T) {
 		}
 		defer Close()
 		err = Initialize(schematic)
-		if err != ErrAlreadyInitialized {
+		if errors.Cause(err) != ErrAlreadyInitialized {
 			t.Errorf("got error %q, want ErrAlreadyInitialized", err)
 		}
 	})
@@ -56,7 +58,7 @@ func TestGlobalGet(t *testing.T) {
 	t.Run("returns an error if called before Initialize", func(t *testing.T) {
 		globalCache = nil
 		_, err := Get(context.Background(), "base")
-		if err != ErrNotInitialized {
+		if errors.Cause(err) != ErrNotInitialized {
 			t.Errorf("got err %q, want ErrNotInitialized", err)
 		}
 	})
