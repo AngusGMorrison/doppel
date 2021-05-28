@@ -36,12 +36,14 @@ func (tl *testLogger) String() string {
 
 func TestWithLogger(t *testing.T) {
 	t.Run("logs cache operations to the logger provded", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		l := &testLogger{out: &bytes.Buffer{}}
-		d, err := New(schematic, WithLogger(l))
+		d, err := New(ctx, schematic, WithLogger(l))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Shutdown(gracePeriod)
 		d.Get(context.Background(), "withBody1")
 
 		if gotLogs := l.String(); gotLogs == "" {
@@ -52,12 +54,14 @@ func TestWithLogger(t *testing.T) {
 
 func TestWithGlobalTimeout(t *testing.T) {
 	t.Run("Get returns context.DeadlineExceeded when timeout expires", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		globalTimeout := 1 * time.Nanosecond
-		d, err := New(schematic, WithGlobalTimeout(globalTimeout))
+		d, err := New(ctx, schematic, WithGlobalTimeout(globalTimeout))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
 
 		_, err = d.Get(context.Background(), "base")
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -66,12 +70,14 @@ func TestWithGlobalTimeout(t *testing.T) {
 	})
 
 	t.Run("Get times out after the shortest of global timeout and request timeout", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		globalTimeout := 1 * time.Millisecond
-		d, err := New(schematic, WithGlobalTimeout(globalTimeout))
+		d, err := New(ctx, schematic, WithGlobalTimeout(globalTimeout))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Shutdown(gracePeriod)
 
 		reqTimeout := 1 * time.Nanosecond
 		errStream := make(chan error)

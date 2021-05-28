@@ -67,7 +67,9 @@ func (d *Doppel) parse(ce *cacheEntry, req *request) {
 			<-req.ctx.Done() // guaranteed to be closed when the parent Get returns
 			cancel()
 		}()
-		base, err := d.Get(ctx, ce.schematic.BaseTmplName)
+
+		var base *template.Template
+		base, err = d.Get(ctx, ce.schematic.BaseTmplName)
 		if err != nil {
 			ce.err = err
 			return

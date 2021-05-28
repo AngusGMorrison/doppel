@@ -3,7 +3,6 @@ package doppel
 import (
 	"context"
 	"html/template"
-	"time"
 
 	"github.com/pkg/errors"
 )
@@ -12,13 +11,11 @@ import (
 // caching.
 var globalCache *Doppel
 
-// Initialize starts the default, global cache. Attempting
-// to perform operations like Get on the global cache before
-// it is initialized will return an error.
+// Initialize starts the default, global cache. Attempting to perform operations
+// like Get on the global cache before it is initialized will return an error.
 //
-// The user is responsible for closing the global cache using
-// Shutdown or Done when finished.
-func Initialize(schematic CacheSchematic, opts ...CacheOption) error {
+// The user is responsible for closing the global cache via the context param.
+func Initialize(ctx context.Context, schematic CacheSchematic, opts ...CacheOption) error {
 	if globalCache != nil {
 		select {
 		case <-globalCache.done:
@@ -26,8 +23,9 @@ func Initialize(schematic CacheSchematic, opts ...CacheOption) error {
 			return errors.WithStack(ErrAlreadyInitialized)
 		}
 	}
+
 	var err error
-	globalCache, err = New(schematic, opts...)
+	globalCache, err = New(ctx, schematic, opts...)
 	return err
 }
 
@@ -41,19 +39,4 @@ func Get(ctx context.Context, name string) (*template.Template, error) {
 	}
 
 	return globalCache.Get(ctx, name)
-}
-
-// Shutdown signals to Get that it should immediately stop accepting
-// new requests. It then waits for gracePeriod to elapse before
-// closing the request stream. If any requests are still active when
-// the request stream is closed, Get will panic.
-func Shutdown(gracePeriod time.Duration) {
-	globalCache.Shutdown(gracePeriod)
-}
-
-// Close forces the global cache to shut down without accepting
-// pending requests. When pending requests are subsequently sent to
-// the request stream, Get will panic.
-func Close() {
-	globalCache.Close()
 }
