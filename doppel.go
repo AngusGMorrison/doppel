@@ -32,18 +32,6 @@ type Doppel struct {
 	once          sync.Once // protects inShutdown and requestSteam from multiple closures
 }
 
-type logger interface {
-	Printf(fmt string, args ...interface{})
-}
-
-// defaultLog provides a no-op logger to avoid a series of nil checks throughout
-// the cache's work loop.
-type defaultLog struct{}
-
-func (d *defaultLog) Printf(format string, args ...interface{}) {
-	// No-op.
-}
-
 // New configures a new *Doppel and returns it to the caller. It
 // should not be used concurrently with operations on the provided
 // schematic.
