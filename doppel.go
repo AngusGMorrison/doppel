@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -23,73 +22,34 @@ import (
 type Doppel struct {
 	globalTimeout time.Duration
 	schematic     CacheSchematic
-	heartbeat     chan struct{} // signals the start of each work loop
-	requestStream chan *request // sends requests to the work loop
-	inShutdown    chan struct{} // signals that graceful shutdown has been triggered
-	done          chan struct{} // signals that the work loop has returned
+	heartbeat     chan struct{}   // signals the start of each work loop
+	requestStream chan<- *request // sends requests to the work loop
+	done          <-chan struct{} // signals that the cache has shut down
 	log           logger
-	retryTimeouts bool      // flags whether to retry parsing templates that have previously timed out
-	once          sync.Once // protects inShutdown and requestSteam from multiple closures
-}
-
-// A CacheSchematic is an acyclic graph of named TemplateSchematics
-// which reference their base templates by name.
-type CacheSchematic map[string]*TemplateSchematic
-
-// Clone returns a deep copy of the CacheSchematic.
-func (cs CacheSchematic) Clone() CacheSchematic {
-	dest := make(CacheSchematic, len(cs))
-	for k, v := range cs {
-		dest[k] = v.Clone()
-	}
-	return dest
-}
-
-// TemplateSchematic describes how to parse a template from a named
-// base template in the cache and zero or more template files.
-//
-// BaseTmplName may be an empty string, indicating a template without
-// a base.
-type TemplateSchematic struct {
-	BaseTmplName string
-	Filepaths    []string
-}
-
-// Clone returns a pointer to deep copy of the underlying
-// TemplateSchematic.
-func (ts *TemplateSchematic) Clone() *TemplateSchematic {
-	dest := &TemplateSchematic{
-		BaseTmplName: ts.BaseTmplName,
-		Filepaths:    make([]string, len(ts.Filepaths)),
-	}
-	copy(dest.Filepaths, ts.Filepaths)
-	return dest
-}
-
-type logger interface {
-	Printf(fmt string, args ...interface{})
-}
-
-// defaultLog provides a no-op logger to avoid a series of nil checks throughout
-// the cache's work loop.
-type defaultLog struct{}
-
-func (d *defaultLog) Printf(format string, args ...interface{}) {
-	// No-op.
+	retryTimeouts bool // flags whether to retry parsing templates that have previously timed out
 }
 
 // New configures a new *Doppel and returns it to the caller. It
 // should not be used concurrently with operations on the provided
 // schematic.
-func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
+func New(ctx context.Context, schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 	if cyclic, err := IsCyclic(schematic); cyclic {
 		return nil, errors.WithStack(err)
 	}
 
+	requestStream := make(chan *request)
+	// Place the requestStream under the control of the caller as if it had
+	// created it. This way, we have knowledge about when it is safe to close
+	// the requestStream even though this function is not the sender.
+	go func() {
+		<-ctx.Done()
+		close(requestStream)
+	}()
+
 	d := &Doppel{
-		schematic:  schematic.Clone(), // prevent race conditions as a result of external access
-		inShutdown: make(chan struct{}),
-		done:       make(chan struct{}),
+		schematic:     schematic.Clone(), // prevent race conditions as a result of external access
+		done:          ctx.Done(),
+		requestStream: requestStream,
 	}
 
 	for _, opt := range opts {
@@ -100,7 +60,7 @@ func New(schematic CacheSchematic, opts ...CacheOption) (*Doppel, error) {
 		d.log = &defaultLog{}
 	}
 
-	d.startCache()
+	d.startCache(requestStream)
 	return d, nil
 }
 
@@ -120,25 +80,23 @@ type result struct {
 	err  error
 }
 
-// startCache launches a concurrent, non-blocking cache of templates
-// and sub-templates that runs until cancelled.
+// startCache launches a concurrent, non-blocking cache of templates and
+// sub-templates that runs until cancelled.
 //
-// If an error is generated when attempting to retrieve a template,
-// further requests for that template will return the original error.
+// If an error is generated when attempting to retrieve a template, further
+// requests for that template will return the original error.
 //
 // Each request to the cache is preemptible via its context.
-func (d *Doppel) startCache() {
-	// Create heartbeat and request stream synchronously to ensure
-	// a caller can never receive nil channels.
+func (d *Doppel) startCache(requestStream <-chan *request) {
+	// Create heartbeat and request stream synchronously to ensure a caller can
+	// never receive nil channels.
 	d.heartbeat = make(chan struct{}, 1)
-	d.requestStream = make(chan *request)
 
 	go func() {
 		defer close(d.heartbeat)
-		defer close(d.done)
 
 		cache := make(map[string]*cacheEntry)
-		for req := range d.requestStream {
+		for req := range requestStream {
 			d.log.Printf(logRequestReceived, req.name)
 			select {
 			case d.heartbeat <- struct{}{}:
@@ -178,7 +136,7 @@ func (d *Doppel) startCache() {
 // can be preempted via the supplied context.Context.
 func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, error) {
 	select {
-	case <-d.inShutdown:
+	case <-d.done:
 		return nil, ErrDoppelShutdown
 	default:
 	}
@@ -206,6 +164,8 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 	defer cancel()
 
 	select {
+	case <-d.done:
+		return nil, ErrDoppelShutdown
 	case <-ctx.Done():
 		return nil, RequestError{
 			errors.WithStack(ctx.Err()),
@@ -234,36 +194,6 @@ func (d *Doppel) Get(ctx context.Context, name string) (*template.Template, erro
 // non-nil.
 func (d *Doppel) Heartbeat() <-chan struct{} {
 	return d.heartbeat
-}
-
-// Shutdown signals to Get that it should immediately stop accepting
-// new requests. It then waits for gracePeriod to elapse before
-// closing the request stream. If any requests are still active when
-// the request stream is closed, Get will panic.
-//
-// Subseqent calls to Shutdown are no-ops.
-func (d *Doppel) Shutdown(gracePeriod time.Duration) {
-	d.once.Do(func() {
-		close(d.inShutdown) // signals that Get should no longer accept new requests
-		d.log.Printf("shutting down gracefully...")
-		go func() {
-			<-time.After(gracePeriod)
-			close(d.requestStream)
-			d.log.Printf("shutdown complete")
-		}()
-	})
-}
-
-// Close forces the Doppel to shut down without accepting pending
-// requests. When pending requests are subsequently sent to the
-// request stream, Get will panic.
-//
-// Subsequent calls to Close are no-ops.
-func (d *Doppel) Close() {
-	d.once.Do(func() {
-		close(d.inShutdown)
-		close(d.requestStream)
-	})
 }
 
 // IsCyclic reports whether a CacheSchematic contains a cycle. If

@@ -21,7 +21,7 @@ func (re RequestError) Is(err error) bool {
 
 // ErrDoppelShutdown is used in response to requests to a Doppel
 // with an closed cache.
-var ErrDoppelShutdown = errors.New("Doppel is in shutdown")
+var ErrDoppelShutdown = errors.New("can't send request to stopped cache")
 
 // ErrSchematicNotFound is used when a named TemplateSchematic isn't present
 // in the Doppel's CacheSchematic.

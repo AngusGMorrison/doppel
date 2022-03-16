@@ -31,30 +31,35 @@ var schematic = CacheSchematic{
 	"withBody2": {"commonNav", []string{body2Path}},
 }
 
-const gracePeriod = 100 * time.Millisecond
-
 func TestNew(t *testing.T) {
 	t.Run("CacheSchematic operations", func(t *testing.T) {
 		t.Run("returns an error if schematic is cyclic", func(t *testing.T) {
 			cyclicSchematic := schematic.Clone()
 			cyclicSchematic["commonNav"].BaseTmplName = "withBody1"
-			d, err := New(cyclicSchematic)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			d, err := New(ctx, cyclicSchematic)
 			if err == nil {
 				t.Errorf("failed to report cycle in schematic")
 			}
 			if d != nil {
 				t.Errorf("got *Doppel %+v, want nil", d)
-				d.Shutdown(gracePeriod)
 			}
 		})
 
 		t.Run("clones provided schematic before use", func(t *testing.T) {
 			testSchematic := schematic.Clone()
-			d, err := New(testSchematic)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			d, err := New(ctx, testSchematic)
 			if err != nil {
 				t.Fatal(err)
 			}
-			d.Shutdown(gracePeriod) // ensures a schematic data race is impossible
+			cancel() // stop the cache to ensure schema data races don't muddy test results
 
 			d.schematic["base"] = nil
 			if testSchematic["base"] == nil {
@@ -64,8 +69,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("calls functional options", func(t *testing.T) {
-		testCases := []int{0, 1, 10}
-		for _, optCount := range testCases {
+		for _, optCount := range []int{0, 1, 10} {
 			var optsCalled int
 			opt := func(*Doppel) {
 				optsCalled++
@@ -76,11 +80,13 @@ func TestNew(t *testing.T) {
 				optArgs[i] = opt
 			}
 
-			d, err := New(schematic, optArgs...)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			_, err := New(ctx, schematic, optArgs...)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Shutdown(gracePeriod)
 
 			if optsCalled != optCount {
 				t.Errorf("%d options were called, want %d", optsCalled, optCount)
@@ -90,11 +96,13 @@ func TestNew(t *testing.T) {
 
 	t.Run("returned *Doppel", func(t *testing.T) {
 		t.Run("has a live cache", func(t *testing.T) {
-			d, err := New(schematic)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			d, err := New(ctx, schematic)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Close()
 
 			d.Get(context.Background(), "anything")
 			select {
@@ -105,11 +113,13 @@ func TestNew(t *testing.T) {
 		})
 
 		t.Run("accepts requests", func(t *testing.T) {
-			d, err := New(schematic)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			d, err := New(ctx, schematic)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Shutdown(gracePeriod)
 
 			req := &request{
 				name:         "base",
@@ -137,11 +147,13 @@ func TestGet(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(fmt.Sprintf("composes and returns %s", tc.schematicName), func(t *testing.T) {
-			d, err := New(schematic)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			d, err := New(ctx, schematic)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Shutdown(gracePeriod)
 
 			tmpl, err := d.Get(context.Background(), tc.schematicName)
 			if err != nil {
@@ -170,12 +182,14 @@ func TestGet(t *testing.T) {
 	}
 
 	t.Run("caches parsed templates", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		log := &testLogger{out: &bytes.Buffer{}}
-		d, err := New(schematic, WithLogger(log))
+		d, err := New(ctx, schematic, WithLogger(log))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
 
 		target := "withBody1"
 		_, err = d.Get(context.Background(), target) // prime cache
@@ -208,11 +222,13 @@ func TestGet(t *testing.T) {
 			Filepaths:    []string{},
 		}
 
-		d, err := New(testSchematic)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		d, err := New(ctx, testSchematic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Shutdown(gracePeriod)
 
 		for _, name := range []string{"incomplete", "missing"} {
 			tmpl, err := d.Get(context.Background(), name)
@@ -236,14 +252,20 @@ func TestGet(t *testing.T) {
 
 		resultStream := make(chan *testResult)
 		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-		d, err := New(schematic)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		d, err := New(ctx, schematic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Shutdown(gracePeriod)
 
 		target := "withBody1"
 		_, err = d.Get(context.Background(), target) // prime the cache
+		if err != nil {
+			t.Fatalf("failed to prime the cache with Get(ctx, %q); got error %v", target, err)
+		}
 
 		var wg sync.WaitGroup
 		count := 50
@@ -286,24 +308,26 @@ func TestGet(t *testing.T) {
 	})
 
 	t.Run("returns context.Canceled if the request is canceled", func(t *testing.T) {
-		d, err := New(schematic)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		d, err := New(ctx, schematic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
 
 		errStream := make(chan error)
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		reqCtx, reqCancel := context.WithCancel(context.Background())
+		defer reqCancel()
 		target := "base"
 		go func() {
-			_, err := d.Get(ctx, target)
+			_, err := d.Get(reqCtx, target)
 			errStream <- err
 		}()
 
 		select {
 		case <-d.Heartbeat(): // cancel after work has started
-			cancel()
+			reqCancel()
 		case <-errStream:
 			t.Fatalf("request completed before cancellation")
 		}
@@ -316,14 +340,17 @@ func TestGet(t *testing.T) {
 
 	t.Run("caches errored results", func(t *testing.T) {
 		target := "error"
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
 		testSchematic := schematic.Clone()
 		testSchematic[target] = &TemplateSchematic{"", []string{"missing"}}
 		log := &testLogger{out: &bytes.Buffer{}}
-		d, err := New(testSchematic, WithLogger(log))
+		d, err := New(ctx, testSchematic, WithLogger(log))
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
 
 		_, err = d.Get(context.Background(), target)
 		if err == nil {
@@ -381,11 +408,14 @@ func TestHeartbeat(t *testing.T) {
 	t.Run("returns a channel that receives a signal on each new request cycle", func(t *testing.T) {
 		const timeout = 1
 		const wantHeartbeats = 4
-		d, err := New(schematic)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		d, err := New(ctx, schematic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
 
 		hb := d.Heartbeat()
 		var gotHeartbeats int
@@ -409,125 +439,6 @@ func TestHeartbeat(t *testing.T) {
 	})
 }
 
-func TestShutdown(t *testing.T) {
-	t.Run("waits until gracePeriod elapses to close requestStream", func(t *testing.T) {
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Shutdown(500 * time.Millisecond)
-
-		hb := d.Heartbeat()
-		select {
-		case <-hb:
-			t.Errorf("heartbeat was closed before graceful shutdown period elapsed")
-		case <-time.After(450 * time.Millisecond):
-		}
-
-		select {
-		case <-hb:
-		case <-time.After(100 * time.Millisecond):
-			t.Errorf("heartbeat failed to close")
-		}
-	})
-
-	t.Run("immediately prevents Get accepting new requests", func(t *testing.T) {
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Shutdown(gracePeriod)
-
-		tmpl, err := d.Get(context.Background(), "base")
-		if tmpl != nil {
-			t.Error("Doppel accepted and completed new request after shutdown")
-		}
-		if err != ErrDoppelShutdown {
-			t.Errorf("got err %v, want ErrDoppelClosed", err)
-		}
-	})
-
-	t.Run("is safe to call twice", func(t *testing.T) {
-		defer func() {
-			if p := recover(); p != nil {
-				t.Errorf("call to d.Shutdown panicked")
-			}
-		}()
-
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Shutdown(gracePeriod)
-		d.Shutdown(gracePeriod)
-	})
-
-	t.Run("is safe to call in conjunction with Close", func(t *testing.T) {
-		defer func() {
-			if p := recover(); p != nil {
-				t.Errorf("call to d.Shutdown panicked")
-			}
-		}()
-
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Close()
-		d.Shutdown(gracePeriod)
-	})
-}
-
-func TestClose(t *testing.T) {
-	t.Run("immediately closes d.requestStream", func(t *testing.T) {
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Close()
-
-		select {
-		case <-d.requestStream:
-		default:
-			t.Errorf("heartbeat failed to close")
-		}
-
-		if _, err := d.Get(context.Background(), "base"); err != ErrDoppelShutdown {
-			t.Errorf("got %v, want ErrDoppelShutdown", err)
-		}
-	})
-
-	t.Run("is safe to call twice", func(t *testing.T) {
-		defer func() {
-			if p := recover(); p != nil {
-				t.Errorf("call to d.Close panicked")
-			}
-		}()
-
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Close()
-		d.Close()
-	})
-
-	t.Run("is safe to call in conjunction with Shutdown", func(t *testing.T) {
-		defer func() {
-			if p := recover(); p != nil {
-				t.Errorf("call to d.Close panicked")
-			}
-		}()
-
-		d, err := New(schematic)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Shutdown(gracePeriod)
-		d.Close()
-	})
-}
-
 // Run StressTest with the -race flag to ensure no race conditions
 // develop under load.
 func Test_StressTest(t *testing.T) {
@@ -536,11 +447,13 @@ func Test_StressTest(t *testing.T) {
 		err    error
 	}
 
-	d, err := New(schematic, WithRetryTimeouts())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d, err := New(ctx, schematic, WithRetryTimeouts())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Shutdown(gracePeriod)
 
 	var wg sync.WaitGroup
 	resultStream := make(chan *testResult)
