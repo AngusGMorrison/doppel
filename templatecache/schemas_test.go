@@ -11,13 +11,13 @@ func TestAdd(t *testing.T) {
 	require := require.New(t)
 
 	t.Run("adds_acyclic_template_schematics_to_graph", func(t *testing.T) {
-		cs := NewCacheSchematic()
-		base := TemplateSchematic{
+		cs := NewCacheSchema()
+		base := TemplateSchema{
 			Name:           "base",
 			Parent:         "",
 			ComponentPaths: []string{"/path/to/template.gohtml"},
 		}
-		child := TemplateSchematic{
+		child := TemplateSchema{
 			Name:           "child",
 			Parent:         "base",
 			ComponentPaths: []string{"/path/to/component.gohtml"},
@@ -33,13 +33,13 @@ func TestAdd(t *testing.T) {
 	})
 
 	t.Run("detects_single-node_cycles", func(t *testing.T) {
-		cs := NewCacheSchematic()
-		base := TemplateSchematic{
+		cs := NewCacheSchema()
+		base := TemplateSchema{
 			Name:           "base",
 			Parent:         "child",
 			ComponentPaths: []string{"/path/to/template.gohtml"},
 		}
-		child := TemplateSchematic{
+		child := TemplateSchema{
 			Name:           "child",
 			Parent:         "base",
 			ComponentPaths: []string{"/path/to/component.gohtml"},
@@ -53,18 +53,18 @@ func TestAdd(t *testing.T) {
 	})
 
 	t.Run("detects_multi-node_cycles", func(t *testing.T) {
-		cs := NewCacheSchematic()
-		base := TemplateSchematic{
+		cs := NewCacheSchema()
+		base := TemplateSchema{
 			Name:           "base",
 			Parent:         "grandchild",
 			ComponentPaths: []string{"/path/to/template.gohtml"},
 		}
-		child := TemplateSchematic{
+		child := TemplateSchema{
 			Name:           "child",
 			Parent:         "base",
 			ComponentPaths: []string{"/path/to/component.gohtml"},
 		}
-		grandchild := TemplateSchematic{
+		grandchild := TemplateSchema{
 			Name:           "grandchild",
 			Parent:         "child",
 			ComponentPaths: []string{"/path/to/component.gohtml"},
