@@ -1,6 +1,8 @@
 # doppel
 
-A concurrent, non-blocking, compositing cache for Go templates.
+_doppel is undergoing a facelift: to see the refactor in progress, check out branch `simplify`._
+
+A concurrent, non-blocking, composing cache for Go templates.
 
 doppel provides a simple, thread-safe way to compose and cache nested templates as they're required. Rather than parsing sub-templates from scratch each time they're needed, a Doppel instance compiles a named combination of templates the first time it's requested and stores it in memory. Once parsed, retrieval is on the order of nanoseconds.
 
@@ -9,6 +11,10 @@ Common sub-templates (e.g. a recurrent nav bar) are parsed once and shared betwe
 Each Get request to the Doppel is non-blocking and preemptible via a `context.Context`. Even where a template must be parsed for the first time, concurrent requests for other templates proceed freely.
 
 **Package documentation**: https://godoc.org/github.com/AngusGMorrison/doppel
+
+## Why?
+
+This is an over-engineered solution to a simple problem. You can almost certainly afford to parse all of your templates into memory at application start. Rather, doppel is a study in advanced concurrency patterns and concepts using goroutines, and an exploration of the trade-offs between using CSPs over locks.
 
 ## Schematics
 At the core of doppel are `CacheSchematics` and `TemplateSchematics`. A `CacheSchematic` is an acyclic graph of named `TemplateSchematic`s that collectively describe how to build a complete template from component parts.
